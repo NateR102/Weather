@@ -5,309 +5,201 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Doppler Radar Simulation</title>
   <style>
-    :root {
-      --ui-bg: rgba(12, 18, 28, 0.82);
-      --ui-border: rgba(180, 210, 255, 0.25);
-      --ui-text: #e7f0ff;
-      --ui-muted: #9fb3d1;
-      --accent: #69b6ff;
-    }
-
-    html, body {
-      margin: 0;
-      width: 100%;
-      height: 100%;
-      background: #070b12;
-      overflow: hidden;
-      font-family: Inter, Segoe UI, Roboto, Arial, sans-serif;
-      color: var(--ui-text);
-    }
-
-    #app {
-      position: relative;
-      width: 100%;
-      height: 100%;
-    }
-
-    canvas {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      display: block;
-      image-rendering: pixelated;
-    }
-
-    .toolbar {
-      position: absolute;
-      left: 50%;
-      bottom: 14px;
-      transform: translateX(-50%);
-      width: min(980px, calc(100% - 20px));
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--ui-border);
-      background: var(--ui-bg);
-      backdrop-filter: blur(4px);
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px 14px;
-      align-items: center;
-      justify-content: space-between;
-      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
-      z-index: 10;
-    }
-
-    .group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .label {
-      font-size: 12px;
-      color: var(--ui-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-
-    button, select {
-      border: 1px solid var(--ui-border);
-      background: rgba(18, 30, 46, 0.95);
-      color: var(--ui-text);
-      padding: 7px 10px;
-      border-radius: 8px;
-      font-size: 13px;
-      cursor: pointer;
-    }
-
-    button:hover, select:hover { border-color: rgba(170, 220, 255, 0.55); }
-
-    .pill {
-      padding: 4px 8px;
-      border-radius: 999px;
-      background: rgba(30, 52, 78, 0.9);
-      border: 1px solid var(--ui-border);
-      font-size: 12px;
-      color: #d0e6ff;
-    }
+    :root { --ui-bg: rgba(12,18,28,.82); --ui-border: rgba(180,210,255,.25); --ui-text:#e7f0ff; --ui-muted:#9fb3d1; }
+    html,body{margin:0;width:100%;height:100%;background:#070b12;overflow:hidden;font-family:Inter,Segoe UI,Arial,sans-serif;color:var(--ui-text)}
+    #app{position:relative;width:100%;height:100%}
+    canvas{position:absolute;inset:0;width:100%;height:100%;display:block;image-rendering:pixelated}
+    .toolbar{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);width:min(1080px,calc(100% - 20px));padding:10px 12px;border-radius:12px;border:1px solid var(--ui-border);background:var(--ui-bg);backdrop-filter:blur(4px);display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:space-between;z-index:10}
+    .group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.label{font-size:12px;color:var(--ui-muted);text-transform:uppercase;letter-spacing:.06em}
+    button,select{border:1px solid var(--ui-border);background:rgba(18,30,46,.95);color:var(--ui-text);padding:7px 10px;border-radius:8px;font-size:13px;cursor:pointer}
+    button.active{border-color:rgba(253,128,128,.8);box-shadow:0 0 0 1px rgba(253,128,128,.4) inset}
+    .pill{padding:4px 8px;border-radius:999px;background:rgba(30,52,78,.9);border:1px solid var(--ui-border);font-size:12px;color:#d0e6ff}
   </style>
 </head>
 <body>
   <div id="app">
     <canvas id="radar"></canvas>
     <div class="toolbar">
-      <div class="group">
-        <span class="label">Preset</span>
-        <select id="preset">
-          <option value="calm">Calm</option>
-          <option value="seasonal" selected>Seasonal</option>
-          <option value="active">Active</option>
-          <option value="severe">Severe</option>
-        </select>
-      </div>
-      <div class="group">
-        <span class="label">Wind</span>
-        <button id="windToggle">Wind: On</button>
-      </div>
-      <div class="group">
-        <span class="pill" id="status">Initializing radar field…</span>
-      </div>
+      <div class="group"><span class="label">Preset</span><select id="preset"><option value="calm">Calm</option><option value="seasonal" selected>Seasonal</option><option value="active">Active</option><option value="severe">Severe</option></select></div>
+      <div class="group"><span class="label">Click Mode</span><button id="normalMode" class="active">Normal Storm</button><button id="supercellMode">Supercell</button></div>
+      <div class="group"><span class="label">Wind</span><button id="windToggle">Wind: On</button></div>
+      <div class="group"><span class="pill" id="status">Initializing radar field…</span></div>
     </div>
   </div>
-
   <script>
     const canvas = document.getElementById('radar');
     const ctx = canvas.getContext('2d');
     const presetSelect = document.getElementById('preset');
     const windToggleBtn = document.getElementById('windToggle');
+    const normalModeBtn = document.getElementById('normalMode');
+    const supercellModeBtn = document.getElementById('supercellMode');
     const statusEl = document.getElementById('status');
 
     const mapImage = new Image();
     mapImage.crossOrigin = 'anonymous';
     mapImage.src = 'https://upload.wikimedia.org/wikipedia/commons/8/80/Equirectangular-projection.jpg';
 
-    const sim = {
-      cellSize: 3,
-      cols: 0,
-      rows: 0,
-      field: null,
-      next: null,
-      threshold: 0.08,
-      windEnabled: true,
-      time: 0,
-      config: {}
-    };
+    const sim = { cellSize: 3, cols: 0, rows: 0, field: null, next: null, rotationField: null, rotationNext: null, threshold: 0.08, windEnabled: true, clickMode: 'normal', time: 0, config: {} };
 
     const PRESETS = {
-      calm:     { diffusion: 0.92, growth: 1.004, decay: 0.9925, spawnChance: 0.0013, spawnBoost: 0.22, noise: 0.012, wind: 0.8 },
-      seasonal: { diffusion: 0.94, growth: 1.010, decay: 0.9905, spawnChance: 0.0023, spawnBoost: 0.26, noise: 0.016, wind: 1.2 },
-      active:   { diffusion: 0.95, growth: 1.016, decay: 0.9885, spawnChance: 0.0031, spawnBoost: 0.30, noise: 0.020, wind: 1.5 },
-      severe:   { diffusion: 0.96, growth: 1.022, decay: 0.9865, spawnChance: 0.0040, spawnBoost: 0.36, noise: 0.025, wind: 1.8 }
+      calm: { diffusion: 0.92, growth: 1.004, decay: 0.9925, rotDecay: 0.989, spawnChance: 0.0013, spawnBoost: 0.20, noise: 0.010, wind: 0.8 },
+      seasonal: { diffusion: 0.94, growth: 1.011, decay: 0.9905, rotDecay: 0.988, spawnChance: 0.0023, spawnBoost: 0.24, noise: 0.014, wind: 1.2 },
+      active: { diffusion: 0.95, growth: 1.017, decay: 0.9885, rotDecay: 0.986, spawnChance: 0.0032, spawnBoost: 0.28, noise: 0.018, wind: 1.5 },
+      severe: { diffusion: 0.96, growth: 1.023, decay: 0.9865, rotDecay: 0.984, spawnChance: 0.0042, spawnBoost: 0.34, noise: 0.022, wind: 1.8 }
     };
 
-    function applyPreset(name) {
-      sim.config = { ...PRESETS[name] };
-      statusEl.textContent = `Preset: ${name.toUpperCase()} | Click map to inject convective energy`;
+    const idx = (x, y) => y * sim.cols + x;
+    const sample = (field, x, y) => (x < 0 || y < 0 || x >= sim.cols || y >= sim.rows) ? 0 : field[idx(x, y)];
+
+    function applyPreset(name) { sim.config = { ...PRESETS[name] }; statusEl.textContent = `Preset: ${name.toUpperCase()} | Mode: ${sim.clickMode === 'normal' ? 'NORMAL' : 'SUPERCELL'}`; }
+
+    function seedInitialField() {
+      sim.field.fill(0); sim.rotationField.fill(0);
+      for (let i = 0; i < sim.field.length; i++) if (Math.random() < 0.006) sim.field[i] = Math.random() * 0.18;
     }
 
     function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      sim.cols = Math.ceil(canvas.width / sim.cellSize);
-      sim.rows = Math.ceil(canvas.height / sim.cellSize);
-      sim.field = new Float32Array(sim.cols * sim.rows);
-      sim.next = new Float32Array(sim.cols * sim.rows);
+      canvas.width = innerWidth; canvas.height = innerHeight;
+      sim.cols = Math.ceil(canvas.width / sim.cellSize); sim.rows = Math.ceil(canvas.height / sim.cellSize);
+      sim.field = new Float32Array(sim.cols * sim.rows); sim.next = new Float32Array(sim.cols * sim.rows);
+      sim.rotationField = new Float32Array(sim.cols * sim.rows); sim.rotationNext = new Float32Array(sim.cols * sim.rows);
       seedInitialField();
     }
 
-    function idx(x, y) { return y * sim.cols + x; }
-
-    function seedInitialField() {
-      sim.field.fill(0);
-      for (let i = 0; i < sim.field.length; i++) {
-        if (Math.random() < 0.006) sim.field[i] = Math.random() * 0.18;
-      }
-    }
-
-    function windForRow(y, t) {
-      const lat = y / sim.rows;
-      const jet = Math.sin((lat * Math.PI * 3.5) + t * 0.005) * 0.9;
-      const trade = Math.cos((lat * Math.PI * 2.0) - t * 0.003) * 0.35;
-      return (jet + trade) * (sim.windEnabled ? sim.config.wind : 0);
-    }
-
-    function sample(field, x, y) {
-      if (x < 0 || y < 0 || x >= sim.cols || y >= sim.rows) return 0;
-      return field[idx(x, y)];
-    }
+    function windForRow(y, t) { const lat = y / sim.rows; const jet = Math.sin((lat * Math.PI * 3.5) + t * 0.005) * 0.9; const trade = Math.cos((lat * Math.PI * 2) - t * 0.003) * 0.35; return (jet + trade) * (sim.windEnabled ? sim.config.wind : 0); }
 
     function updateField() {
-      const { diffusion, growth, decay, spawnChance, spawnBoost, noise } = sim.config;
-      const c = sim.cols;
-      const r = sim.rows;
-      const src = sim.field;
-      const dst = sim.next;
+      const { diffusion, growth, decay, rotDecay, spawnChance, spawnBoost, noise } = sim.config;
+      const src = sim.field, dst = sim.next, rotSrc = sim.rotationField, rotDst = sim.rotationNext;
+      const c = sim.cols, r = sim.rows;
 
       for (let y = 0; y < r; y++) {
-        const w = windForRow(y, sim.time);
+        const wind = windForRow(y, sim.time);
         for (let x = 0; x < c; x++) {
-          const self = sample(src, x, y);
-          const n = sample(src, x, y - 1);
-          const s = sample(src, x, y + 1);
-          const e = sample(src, x + 1, y);
-          const wv = sample(src, x - 1, y);
-          const ne = sample(src, x + 1, y - 1);
-          const nw = sample(src, x - 1, y - 1);
-          const se = sample(src, x + 1, y + 1);
-          const sw = sample(src, x - 1, y + 1);
+          const id = idx(x, y);
+          const self = src[id];
+          const n = sample(src, x, y - 1), s = sample(src, x, y + 1), e = sample(src, x + 1, y), w = sample(src, x - 1, y);
+          const ne = sample(src, x + 1, y - 1), nw = sample(src, x - 1, y - 1), se = sample(src, x + 1, y + 1), sw = sample(src, x - 1, y + 1);
+          const avg = (n + s + e + w + ne + nw + se + sw) * 0.125;
+          const diffused = self * (1 - diffusion) + avg * diffusion;
 
-          const neighborAvg = (n + s + e + wv + ne + nw + se + sw) / 8;
-          const diffused = self * (1 - diffusion) + neighborAvg * diffusion;
+          const rot = rotSrc[id];
+          const gradX = sample(rotSrc, x + 1, y) - sample(rotSrc, x - 1, y);
+          const gradY = sample(rotSrc, x, y + 1) - sample(rotSrc, x, y - 1);
+          const curveX = -gradY * 1.8 + rot * 0.5;
+          const curveY = gradX * 1.8 + rot * 0.35;
+          const ax = x - wind - curveX;
+          const ay = y - curveY;
+          const fx = Math.floor(ax), fy = Math.floor(ay), tx = ax - fx, ty = ay - fy;
+          const s00 = sample(src, fx, fy), s10 = sample(src, fx + 1, fy), s01 = sample(src, fx, fy + 1), s11 = sample(src, fx + 1, fy + 1);
+          const adv = (s00 * (1 - tx) + s10 * tx) * (1 - ty) + (s01 * (1 - tx) + s11 * tx) * ty;
 
-          const advectX = x - w;
-          const left = Math.floor(advectX);
-          const frac = advectX - left;
-          const advL = sample(src, left, y);
-          const advR = sample(src, left + 1, y);
-          const advected = advL * (1 - frac) + advR * frac;
+          const rotAvg = (sample(rotSrc, x, y - 1) + sample(rotSrc, x, y + 1) + sample(rotSrc, x + 1, y) + sample(rotSrc, x - 1, y)) * 0.25;
+          let nextRot = (rot * 0.84 + rotAvg * 0.16) * rotDecay + (Math.random() * 2 - 1) * 0.002;
 
-          let value = (diffused * 0.72 + advected * 0.28) * growth;
+          let value = (diffused * 0.62 + adv * 0.38) * growth;
+          const hookBoost = Math.max(0, rot) * Math.max(0, gradX - gradY) * 0.6;
+          value += hookBoost;
           value *= decay;
           value += (Math.random() * 2 - 1) * noise;
+          value += (Math.random() - 0.5) * 0.01; // per-cell flicker
+          if (Math.random() < spawnChance) value += Math.random() * spawnBoost;
 
-          if (Math.random() < spawnChance) {
-            value += Math.random() * spawnBoost;
-          }
-
-          if (value < 0.01) value = 0;
-          if (value > 1.0) value = 1.0;
-          dst[idx(x, y)] = value;
+          dst[id] = Math.min(1, Math.max(0, value < 0.01 ? 0 : value));
+          rotDst[id] = Math.max(-1, Math.min(1, nextRot));
         }
       }
 
-      sim.field = dst;
-      sim.next = src;
-      sim.time += 1;
+      sim.field = dst; sim.next = src;
+      sim.rotationField = rotDst; sim.rotationNext = rotSrc;
+      sim.time++;
     }
 
-    function colorFor(v) {
+    function colorFor(v, rot) {
       if (v < sim.threshold) return null;
-      if (v < 0.35) {
-        const a = Math.min(0.75, 0.22 + v * 1.25);
-        return `rgba(46, 205, 103, ${a.toFixed(3)})`;
-      }
-      if (v < 0.65) {
-        const a = Math.min(0.82, 0.38 + (v - 0.35) * 1.45);
-        return `rgba(242, 226, 75, ${a.toFixed(3)})`;
-      }
-      const a = Math.min(0.9, 0.55 + (v - 0.65) * 1.5);
-      return `rgba(231, 57, 57, ${a.toFixed(3)})`;
+      const jitter = 0.92 + Math.random() * 0.16;
+      if (v < 0.35) return `rgba(46,205,103,${Math.min(0.76,(0.22 + v * 1.2) * jitter).toFixed(3)})`;
+      if (v < 0.65) return `rgba(242,226,75,${Math.min(0.84,(0.38 + (v - 0.35) * 1.45) * jitter).toFixed(3)})`;
+      const redBoost = rot > 0.35 ? 20 : 0;
+      return `rgba(${231 + redBoost},57,57,${Math.min(0.92,(0.55 + (v - 0.65) * 1.5) * jitter).toFixed(3)})`;
     }
 
     function drawMap() {
-      if (!mapImage.complete || mapImage.naturalWidth === 0) return;
-      ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
+      if (mapImage.complete && mapImage.naturalWidth > 0) {
+        ctx.globalAlpha = 0.72;
+        ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.30)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
     function renderRadar() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawMap();
-
       const cell = sim.cellSize;
       for (let y = 0; y < sim.rows; y++) {
         for (let x = 0; x < sim.cols; x++) {
-          const v = sim.field[idx(x, y)];
-          const color = colorFor(v);
+          const id = idx(x, y);
+          const color = colorFor(sim.field[id], sim.rotationField[id]);
           if (!color) continue;
           ctx.fillStyle = color;
           ctx.fillRect(x * cell, y * cell, cell, cell);
         }
       }
+      ctx.fillStyle = 'rgba(255,255,255,0.02)';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
     }
 
     function injectEnergy(screenX, screenY) {
-      const gx = Math.floor(screenX / sim.cellSize);
-      const gy = Math.floor(screenY / sim.cellSize);
-      const radius = 8;
-
-      for (let y = gy - radius; y <= gy + radius; y++) {
-        for (let x = gx - radius; x <= gx + radius; x++) {
-          if (x < 0 || y < 0 || x >= sim.cols || y >= sim.rows) continue;
-          const dx = x - gx;
-          const dy = y - gy;
-          const d2 = dx * dx + dy * dy;
-          if (d2 > radius * radius) continue;
-          const falloff = 1 - d2 / (radius * radius);
-          const boost = falloff * (0.18 + Math.random() * 0.30);
-          sim.field[idx(x, y)] = Math.min(1, sim.field[idx(x, y)] + boost);
-        }
+      const gx = Math.floor(screenX / sim.cellSize), gy = Math.floor(screenY / sim.cellSize), radius = 8;
+      for (let y = gy - radius; y <= gy + radius; y++) for (let x = gx - radius; x <= gx + radius; x++) {
+        if (x < 0 || y < 0 || x >= sim.cols || y >= sim.rows) continue;
+        const d2 = (x - gx) ** 2 + (y - gy) ** 2; if (d2 > radius * radius) continue;
+        const falloff = 1 - d2 / (radius * radius), boost = falloff * (0.18 + Math.random() * 0.3);
+        sim.field[idx(x, y)] = Math.min(1, sim.field[idx(x, y)] + boost);
       }
     }
 
-    function tick() {
-      updateField();
-      renderRadar();
-      requestAnimationFrame(tick);
+    function injectSupercell(screenX, screenY) {
+      const gx = Math.floor(screenX / sim.cellSize), gy = Math.floor(screenY / sim.cellSize), radius = 10;
+      for (let y = gy - radius; y <= gy + radius; y++) for (let x = gx - radius; x <= gx + radius; x++) {
+        if (x < 0 || y < 0 || x >= sim.cols || y >= sim.rows) continue;
+        const dx = x - gx, dy = y - gy, d2 = dx * dx + dy * dy; if (d2 > radius * radius) continue;
+        const dist = Math.sqrt(d2) / radius, angle = Math.atan2(dy, dx), hook = Math.max(0, Math.cos(angle - 2.4));
+        const core = Math.max(0, 1 - dist * 1.6);
+        const inflow = Math.max(0, 1 - Math.abs(dy + dx * 0.6) / radius);
+        const tail = hook * Math.max(0, 1 - dist * 0.9);
+        sim.field[idx(x, y)] = Math.min(1, sim.field[idx(x, y)] + core * 0.55 + inflow * 0.25 + tail * 0.32);
+        sim.rotationField[idx(x, y)] = Math.min(1, sim.rotationField[idx(x, y)] + core * 0.85 + tail * 0.6);
+      }
     }
+
+    function setMode(mode) {
+      sim.clickMode = mode;
+      normalModeBtn.classList.toggle('active', mode === 'normal');
+      supercellModeBtn.classList.toggle('active', mode === 'supercell');
+      statusEl.textContent = `Preset: ${presetSelect.value.toUpperCase()} | Mode: ${mode.toUpperCase()}`;
+    }
+
+    function tick() { updateField(); renderRadar(); requestAnimationFrame(tick); }
 
     canvas.addEventListener('click', (e) => {
       const rect = canvas.getBoundingClientRect();
-      injectEnergy(e.clientX - rect.left, e.clientY - rect.top);
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      sim.clickMode === 'supercell' ? injectSupercell(x, y) : injectEnergy(x, y);
     });
 
     presetSelect.addEventListener('change', () => applyPreset(presetSelect.value));
-    windToggleBtn.addEventListener('click', () => {
-      sim.windEnabled = !sim.windEnabled;
-      windToggleBtn.textContent = `Wind: ${sim.windEnabled ? 'On' : 'Off'}`;
-    });
-
-    window.addEventListener('resize', resize);
+    windToggleBtn.addEventListener('click', () => { sim.windEnabled = !sim.windEnabled; windToggleBtn.textContent = `Wind: ${sim.windEnabled ? 'On' : 'Off'}`; });
+    normalModeBtn.addEventListener('click', () => setMode('normal'));
+    supercellModeBtn.addEventListener('click', () => setMode('supercell'));
+    addEventListener('resize', resize);
 
     applyPreset('seasonal');
+    setMode('normal');
     resize();
-    mapImage.addEventListener('load', () => { statusEl.textContent = 'Radar online. Click to energize convection zones.'; });
+    mapImage.addEventListener('load', () => { statusEl.textContent = 'Radar online. Normal/Supercell modes ready.'; });
     tick();
   </script>
 </body>
