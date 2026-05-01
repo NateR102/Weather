@@ -1,190 +1,97 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Doppler Radar Weather Sandbox</title>
-  <style>
-    :root { --ui-bg: rgba(12,18,28,.82); --ui-border: rgba(180,210,255,.25); --ui-text:#e7f0ff; --ui-muted:#9fb3d1; }
-    html,body{margin:0;width:100%;height:100%;background:#070b12;overflow:hidden;font-family:Inter,Segoe UI,Arial,sans-serif;color:var(--ui-text)}
-    #app{position:relative;width:100%;height:100%} canvas{position:absolute;inset:0;width:100%;height:100%;display:block;image-rendering:pixelated}
-    .toolbar{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);width:min(1240px,calc(100% - 20px));padding:10px;border:1px solid var(--ui-border);border-radius:12px;background:var(--ui-bg);display:flex;gap:8px;flex-wrap:wrap;z-index:10}
-    button{border:1px solid var(--ui-border);background:rgba(18,30,46,.95);color:var(--ui-text);padding:7px 9px;border-radius:8px;font-size:12px;cursor:pointer}
-    button.active{border-color:rgba(120,220,255,.95);box-shadow:inset 0 0 0 1px rgba(120,220,255,.35)} .pill{padding:6px 10px;font-size:12px;color:#b9d8ff}
-  </style>
-</head>
-<body><div id="app"><canvas id="radar"></canvas><div class="toolbar" id="toolbar"></div></div>
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Radar Storm Viewer</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#060a12}canvas{width:100%;height:100%;display:block;image-rendering:pixelated}.hud{position:fixed;left:12px;bottom:12px;color:#d6e8ff;font:12px sans-serif;background:rgba(10,16,26,.7);padding:8px 10px;border:1px solid rgba(170,200,255,.3);border-radius:8px}</style></head>
+<body><canvas id='c'></canvas><div class='hud'>Click/drag to spawn storms</div>
 <script>
-const canvas = document.getElementById('radar'), ctx = canvas.getContext('2d'), toolbar = document.getElementById('toolbar');
-const mapImage = new Image(); mapImage.crossOrigin='anonymous'; mapImage.src='https://upload.wikimedia.org/wikipedia/commons/8/80/Equirectangular-projection.jpg';
-const TOOLS=['high_pressure','low_pressure','moisture','temperature','wind_shear','cold_front','warm_front','dryline','supercell'];
-const TOOL_LABEL={high_pressure:'High Pressure',low_pressure:'Low Pressure',moisture:'Moisture',temperature:'Temperature',wind_shear:'Wind Shear',cold_front:'Cold Front',warm_front:'Warm Front',dryline:'Dryline',supercell:'Supercell'};
-const sim={cellSize:3,cols:0,rows:0,field:null,next:null,rotationField:null,rotationNext:null,pressureField:null,temperatureField:null,humidityField:null,shearField:null,windXField:null,windYField:null,jetStreamX:null,jetStreamY:null,threshold:0.08,time:0,frame:0,tool:'low_pressure'};
-let mouseDown=false, mouseX=0, mouseY=0;
-let viewMode='combined', radarOnly=false;
-const idx=(x,y)=>y*sim.cols+x, sample=(f,x,y)=>(x<0||y<0||x>=sim.cols||y>=sim.rows)?0:f[idx(x,y)];
-const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-function noise(x,y,t=0){const v=Math.sin(x*12.9898+y*78.233+t*3.71)*43758.5453;return v-Math.floor(v);}
-function buildToolbar(){
-  toolbar.innerHTML=''; TOOLS.forEach(t=>{const b=document.createElement('button');b.textContent=TOOL_LABEL[t];b.onclick=()=>setTool(t);b.id='tool_'+t;toolbar.appendChild(b)});
-  const s=document.createElement('span');s.className='pill';s.id='status';s.textContent='Tool: LOW PRESSURE';toolbar.appendChild(s); setTool(sim.tool);
+const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+const map=new Image(); map.crossOrigin='anonymous'; map.src='https://upload.wikimedia.org/wikipedia/commons/8/80/Equirectangular-projection.jpg';
+const sim={cell:3,cols:0,rows:0,field:null,next:null,rot:null,rotN:null,types:null,time:0};
+const stormNames=['Alex','Brooke','Chris','Dylan','Ethan','Fiona','Gavin','Hazel','Ivan','Jade','Kai','Lena','Milo','Nora','Orion','Piper','Quinn','Riley','Sage','Tyler','Uma','Vera','Wyatt','Xena','Yara','Zane'];
+let nameIndex=0,stormId=1;
+const storms=[];
+let mouseDown=false,mx=0,my=0;
+const idx=(x,y)=>y*sim.cols+x, sample=(a,x,y)=>(x<0||y<0||x>=sim.cols||y>=sim.rows)?0:a[idx(x,y)];
+function resize(){canvas.width=innerWidth;canvas.height=innerHeight;sim.cols=Math.ceil(canvas.width/sim.cell);sim.rows=Math.ceil(canvas.height/sim.cell);const n=sim.cols*sim.rows;sim.field=new Float32Array(n);sim.next=new Float32Array(n);sim.rot=new Float32Array(n);sim.rotN=new Float32Array(n);sim.types=new Uint8Array(n);} addEventListener('resize',resize);resize();
+function stormType(x,y){const r=Math.random();const water=(y/sim.rows>0.55&&y/sim.rows<0.82); if(water&&r<0.05)return 4; if(r<0.60)return 1; if(r<0.85)return 2; if(r<0.95)return 3; return 4;}
+function spawnStorm(px,py){const gx=Math.floor(px/sim.cell),gy=Math.floor(py/sim.cell),r=4,type=stormType(gx,gy); for(let y=gy-r;y<=gy+r;y++)for(let x=gx-r;x<=gx+r;x++){if(x<0||y<0||x>=sim.cols||y>=sim.rows)continue; const d2=(x-gx)**2+(y-gy)**2;if(d2>r*r)continue; const f=1-d2/(r*r),id=idx(x,y); sim.field[id]=Math.min(1,sim.field[id]+f*(0.12+Math.random()*0.16)); sim.types[id]=type; if(type>=3)sim.rot[id]=Math.min(1,sim.rot[id]+f*(0.18+Math.random()*0.22)); }}
+function jetX(x,y){return Math.sin(y*0.06)*2.8 + Math.sin(x*0.02+y*0.03)*0.35;} function jetY(x,y){return Math.cos(x*0.02)*0.22;}
+function update(){
+ for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
+  const id=idx(x,y),v=sim.field[id],t=sim.types[id],rot=sim.rot[id];
+  const n=sample(sim.field,x,y-1),s=sample(sim.field,x,y+1),e=sample(sim.field,x+1,y),w=sample(sim.field,x-1,y),avg=(n+s+e+w)*0.25;
+  let wx=jetX(x,y), wy=jetY(x,y);
+  if(t===3||t===4){const gx=sample(sim.rot,x+1,y)-sample(sim.rot,x-1,y), gy=sample(sim.rot,x,y+1)-sample(sim.rot,x,y-1); wx+=-gy*1.1+rot*0.2; wy+=gx*1.1;}
+  const ax=x-wx*0.22, ay=y-wy*0.22, fx=Math.floor(ax), fy=Math.floor(ay), tx=ax-fx, ty=ay-fy;
+  const a00=sample(sim.field,fx,fy),a10=sample(sim.field,fx+1,fy),a01=sample(sim.field,fx,fy+1),a11=sample(sim.field,fx+1,fy+1);
+  const adv=(a00*(1-tx)+a10*tx)*(1-ty)+(a01*(1-tx)+a11*tx)*ty;
+  let growth=0.0; if(t===1)growth=0.008; else if(t===2)growth=0.013; else if(t===3)growth=0.017; else if(t===4)growth=0.015;
+  if(Math.random()<0.02) growth+=0.01; // pocket intensification
+  let nv=v*0.10+avg*0.42+adv*0.48; nv += (nv*nv)*growth;
+  if(t===3&&Math.random()<0.002){nv*=1.12; sim.rotN[id]=Math.min(1,rot+0.18);} // tornado pulse
+  if(t===4){nv+=Math.max(0,rot)*0.014; sim.rotN[id]=Math.min(1,rot*0.992+0.003);} else sim.rotN[id]=Math.max(0,rot*0.985);
+  nv*=0.955 + Math.random()*0.01; // decay
+  if(nv<0.02) {nv=0; sim.types[id]=0; sim.rotN[id]=0;} // break apart/disappear
+  sim.next[id]=Math.min(1,Math.max(0,nv));
+ }
+ [sim.field,sim.next]=[sim.next,sim.field]; [sim.rot,sim.rotN]=[sim.rotN,sim.rot]; sim.time++;
 }
-function setTool(t){sim.tool=t; TOOLS.forEach(k=>document.getElementById('tool_'+k)?.classList.toggle('active',k===t)); document.getElementById('status').textContent='Tool: '+TOOL_LABEL[t].toUpperCase();}
-function initFields(){
-  const n=sim.cols*sim.rows; sim.field=new Float32Array(n); sim.next=new Float32Array(n); sim.rotationField=new Float32Array(n); sim.rotationNext=new Float32Array(n);
-  sim.pressureField=new Float32Array(n); sim.temperatureField=new Float32Array(n); sim.humidityField=new Float32Array(n); sim.shearField=new Float32Array(n); sim.windXField=new Float32Array(n); sim.windYField=new Float32Array(n); sim.jetStreamX=new Float32Array(sim.rows); sim.jetStreamY=new Float32Array(sim.rows);
-  for(let i=0;i<n;i++){sim.pressureField[i]=0.5; sim.temperatureField[i]=0.5; sim.humidityField[i]=0.5; sim.shearField[i]=0.3;}
-  for(let y=0;y<sim.rows;y++){ const latitude=y/Math.max(1,sim.rows-1); const jetStrength=Math.sin(latitude*Math.PI); sim.jetStreamX[y]=jetStrength*3.0; sim.jetStreamY[y]=Math.cos(latitude*Math.PI*2)*0.12; }
+
+function classifyStorm(intensity, rot, tornadic, yNorm, size){
+  if(tornadic) return 'Tornadic';
+  if(yNorm>0.55&&yNorm<0.82&&size>120&&intensity>0.65) return 'Hurricane';
+  if(yNorm>0.55&&yNorm<0.82&&size>80) return 'Tropical System';
+  if(rot>0.35 && intensity>0.55) return 'Supercell';
+  if(intensity>0.65) return 'Severe';
+  if(intensity>0.38) return 'Strong';
+  return 'Weak';
 }
-function resize(){canvas.width=innerWidth; canvas.height=innerHeight; sim.cols=Math.ceil(canvas.width/sim.cellSize); sim.rows=Math.ceil(canvas.height/sim.cellSize); initFields();}
-function applyBrush(gx,gy,r,fn){for(let y=gy-r;y<=gy+r;y++)for(let x=gx-r;x<=gx+r;x++){if(x<0||y<0||x>=sim.cols||y>=sim.rows)continue; const d2=(x-gx)**2+(y-gy)**2;if(d2>r*r)continue; fn(idx(x,y),1-d2/(r*r),x,y);}}
-function applyFront(gx,gy,type){const ang=Math.PI*0.18, len=70, width=8; for(let i=-len;i<=len;i++)for(let w=-width;w<=width;w++){const x=Math.floor(gx+i*Math.cos(ang)-w*Math.sin(ang)), y=Math.floor(gy+i*Math.sin(ang)+w*Math.cos(ang)); if(x<0||y<0||x>=sim.cols||y>=sim.rows)continue; const id=idx(x,y), t=Math.abs(w)/width;
-  if(type==='cold_front'){sim.temperatureField[id]=clamp(sim.temperatureField[id]-0.22*(1-t),0,1); sim.humidityField[id]=clamp(sim.humidityField[id]+0.10*(1-t),0,1); sim.pressureField[id]=clamp(sim.pressureField[id]-0.06*(1-t),0,1);} 
-  if(type==='warm_front'){sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.15*(1-t),0,1); sim.humidityField[id]=clamp(sim.humidityField[id]+0.07*(1-t),0,1);}
-  if(type==='dryline'){sim.humidityField[id]=clamp(sim.humidityField[id]-(i>0?0.2:-0.02)*(1-t),0,1); sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.12*(1-t),0,1); sim.shearField[id]=clamp(sim.shearField[id]+0.25*(1-t),0,1); sim.pressureField[id]=clamp(sim.pressureField[id]-0.07*(1-t),0,1);} }}
-function injectTool(px,py){const gx=Math.floor(px/sim.cellSize), gy=Math.floor(py/sim.cellSize), r=3;
- if(sim.tool==='cold_front'||sim.tool==='warm_front'||sim.tool==='dryline') return applyFront(gx,gy,sim.tool);
- if(sim.tool==='supercell'){applyBrush(gx,gy,10,(id,f)=>{sim.humidityField[id]=clamp(sim.humidityField[id]+0.38*f,0,1);sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.33*f,0,1);sim.shearField[id]=clamp(sim.shearField[id]+0.45*f,0,1);sim.pressureField[id]=clamp(sim.pressureField[id]-0.28*f,0,1); sim.rotationField[id]=clamp(sim.rotationField[id]+0.42*f,0,1);}); return;}
- applyBrush(gx,gy,r,(id,f)=>{if(sim.tool==='high_pressure')sim.pressureField[id]=clamp(sim.pressureField[id]+0.22*f,0,1);
-  if(sim.tool==='low_pressure')sim.pressureField[id]=clamp(sim.pressureField[id]-0.22*f,0,1);
-  if(sim.tool==='moisture')sim.humidityField[id]=clamp(sim.humidityField[id]+0.26*f,0,1);
-  if(sim.tool==='temperature')sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.24*f,0,1);
-  if(sim.tool==='wind_shear')sim.shearField[id]=clamp(sim.shearField[id]+0.22*f,0,1);});
-}
-function updateField(){
-  const WIND_STRENGTH=0.5, WIND_CLAMP=3.8, SHEAR_STRENGTH=0.3;
-  for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
-    const id=idx(x,y);
-    const dPx=sample(sim.pressureField,x+1,y)-sample(sim.pressureField,x-1,y);
-    const dPy=sample(sim.pressureField,x,y+1)-sample(sim.pressureField,x,y-1);
-    const shearX=(noise(x*0.11,y*0.11,sim.time*0.01)-0.5)*SHEAR_STRENGTH;
-    const shearY=(noise(x*0.11+19,y*0.11+31,sim.time*0.01)-0.5)*SHEAR_STRENGTH;
-    const curveX=Math.sin(x*0.01 + y*0.02)*0.5;
-    const curveY=Math.cos(x*0.01)*0.3;
-    let wx=sim.jetStreamX[y] + curveX + (-dPx*0.3) + shearX*0.3, wy=sim.jetStreamY[y] + curveY + (-dPy*0.3) + shearY*0.3;
-    if(Math.abs(wx)<0.1) wx += 0.2;
-    const mag=Math.hypot(wx,wy);
-    if(mag>WIND_CLAMP){const k=WIND_CLAMP/mag; wx*=k; wy*=k;}
-    sim.windXField[id]=wx; sim.windYField[id]=wy;
-  }
+
+function detectStormClusters(){
+  const visited=new Uint8Array(sim.cols*sim.rows), clusters=[];
+  const th=0.12;
   for(let y=1;y<sim.rows-1;y++)for(let x=1;x<sim.cols-1;x++){
-    const id=idx(x,y);
-    sim.windXField[id]=(sim.windXField[id]+sim.windXField[idx(x-1,y)]+sim.windXField[idx(x+1,y)]+sim.windXField[idx(x,y-1)]+sim.windXField[idx(x,y+1)])*0.2;
-    sim.windYField[id]=(sim.windYField[id]+sim.windYField[idx(x-1,y)]+sim.windYField[idx(x+1,y)]+sim.windYField[idx(x,y-1)]+sim.windYField[idx(x,y+1)])*0.2;
-  }
-
-  for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
-    const id=idx(x,y), h=sim.humidityField[id], t=sim.temperatureField[id], sh=sim.shearField[id], rot=sim.rotationField[id];
-    const wx=sim.windXField[id], wy=sim.windYField[id];
-    const n=sample(sim.field,x,y-1),s=sample(sim.field,x,y+1),e=sample(sim.field,x+1,y),w=sample(sim.field,x-1,y),avg=(n+s+e+w)*0.25;
-    const ax=x-wx, ay=y-wy, fx=Math.floor(ax), fy=Math.floor(ay), tx=ax-fx, ty=ay-fy;
-    const a00=sample(sim.field,fx,fy),a10=sample(sim.field,fx+1,fy),a01=sample(sim.field,fx,fy+1),a11=sample(sim.field,fx+1,fy+1);
-    const adv=(a00*(1-tx)+a10*tx)*(1-ty)+(a01*(1-tx)+a11*tx)*ty;
-
-    const div=(sample(sim.windXField,x+1,y)-sample(sim.windXField,x-1,y))+(sample(sim.windYField,x,y+1)-sample(sim.windYField,x,y-1));
-    const convergence=Math.max(0,-div*0.5), divergence=Math.max(0,div*0.5);
-    const mainAdv=adv;
-    const nbrAdv=sample(sim.field, Math.round(ax + Math.sign(wx||1)), Math.round(ay + Math.sign(wy||1)));
-    const advMix=mainAdv*0.7 + nbrAdv*0.3;
-    let val=sim.field[id]*0.08+avg*0.22+advMix*0.70;
-    const instability=h*t;
-    const growth=convergence*instability;
-    if(growth>0.02) val+=growth*0.08;
-    val-=divergence*(0.05+0.04*(1-h));
-    // simple stable convergence support
-    if(convergence>0.08 && h>0.55) val*=1.05;
-    else val*=0.97;
-    val += Math.max(0,rot)*Math.max(0,sh-0.45)*0.01;
-    val += (val*val)*(0.006+growth*0.018);
-    val*=0.94;
-    if(h<0.35 || divergence>0.10) val*=0.85;
-    if(Math.abs(sim.field[id]-avg)>0.08 && Math.random()<0.13) val*=0.84;
-    if(val<0.28 && Math.random()<0.03) val*=0.05;
-    val += (Math.random()*2-1)*0.008;
-
-    if(rot>0.72 && sample(sim.pressureField,x,y)<0.35 && h>0.7 && sh>0.65 && sim.field[id]>0.65){ val = clamp(val+0.06,0,1); sim.rotationNext[id]=clamp(rot+0.05,0,1); }
-    else sim.rotationNext[id]=clamp((rot*0.986 + sh*0.0025) + (Math.random()*2-1)*0.0012,0,1);
-    sim.next[id]=clamp(val,0,1);
-  }
-  const tmp=sim.field; sim.field=sim.next; sim.next=tmp; const rt=sim.rotationField; sim.rotationField=sim.rotationNext; sim.rotationNext=rt; sim.time++;
-}
-function colorFor(v){if(v<sim.threshold)return null; const j=0.9+Math.random()*0.18; if(v<0.35)return `rgba(46,205,103,${Math.min(0.95,(0.24+v*1.32)*j).toFixed(3)})`; if(v<0.65)return `rgba(242,226,75,${Math.min(0.96,(0.40+(v-0.35)*1.55)*j).toFixed(3)})`; return `rgba(231,57,57,${Math.min(0.98,(0.60+(v-0.65)*1.8)*j).toFixed(3)})`;}
-function drawMap(){if(mapImage.complete&&mapImage.naturalWidth>0){ctx.globalAlpha=.7;ctx.drawImage(mapImage,0,0,canvas.width,canvas.height);ctx.globalAlpha=1;} ctx.fillStyle='rgba(8,16,28,0.20)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='rgba(0,0,0,0.26)';ctx.fillRect(0,0,canvas.width,canvas.height)}
-
-function renderFieldOverlay(mode, combined=false){
-  const c=sim.cellSize;
-  for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
-    const id=idx(x,y);
-    const p=sim.pressureField[id], t=sim.temperatureField[id], h=sim.humidityField[id], sh=sim.shearField[id];
-    let color=null;
-    if(mode==='pressure'){
-      const pr=(p-0.5)*2;
-      const a=combined ? (0.15+Math.abs(pr)*0.15) : (0.5+Math.abs(pr)*0.3);
-      color=pr<0?`rgba(255,70,70,${a.toFixed(3)})`:`rgba(70,130,255,${a.toFixed(3)})`;
-    } else if(mode==='temperature'){
-      const tt=Math.max(0,Math.min(1,t));
-      const a=combined ? (0.05+tt*0.10) : (0.45+tt*0.3);
-      const r=Math.floor(80+tt*170), b=Math.floor(255-tt*170), g=Math.floor(70+Math.abs(tt-0.5)*70);
-      color=`rgba(${r},${g},${b},${a.toFixed(3)})`;
-    } else if(mode==='moisture'){
-      const a=combined ? (0.1+h*0.15) : (h*0.85);
-      color=`rgba(70,255,110,${a.toFixed(3)})`;
-    } else if(mode==='shear'){
-      const a=combined ? (0.1+sh*0.1) : (0.5+sh*0.3);
-      color=`rgba(208,90,255,${a.toFixed(3)})`;
+    const id=idx(x,y); if(visited[id]||sim.field[id]<th) continue;
+    const q=[[x,y]]; visited[id]=1;
+    let sumX=0,sumY=0,sumI=0,sumR=0,count=0,maxI=0;
+    while(q.length){const [cx,cy]=q.pop(); const cid=idx(cx,cy),v=sim.field[cid]; if(v<th) continue;
+      sumX+=cx; sumY+=cy; sumI+=v; sumR+=sim.rot[cid]; count++; if(v>maxI)maxI=v;
+      const ns=[[1,0],[-1,0],[0,1],[0,-1]];
+      for(const [dx,dy] of ns){const nx=cx+dx,ny=cy+dy,nid=idx(nx,ny); if(nx<1||ny<1||nx>=sim.cols-1||ny>=sim.rows-1||visited[nid])continue; if(sim.field[nid]<th)continue; visited[nid]=1; q.push([nx,ny]);}
     }
-    if(!color) continue;
-    ctx.fillStyle=color; ctx.fillRect(x*c,y*c,c,c);
+    if(count<8) continue;
+    clusters.push({x:sumX/count,y:sumY/count,intensity:sumI/count,rot:sumR/count,size:count,maxI});
+  }
+  return clusters;
+}
+
+function updateStormTracking(){
+  const clusters=detectStormClusters();
+  for(const s of storms) s.missed++;
+  for(const c of clusters){
+    let best=null,bestD=9999;
+    for(const s of storms){const d=Math.hypot(s.x-c.x,s.y-c.y); if(d<bestD&&d<12){best=s;bestD=d;}}
+    const tornadic=c.rot>0.55&&c.maxI>0.72&&Math.random()<0.08;
+    if(best){best.x=c.x;best.y=c.y;best.intensity=c.intensity;best.rot=c.rot;best.size=c.size;best.age++;best.missed=0;best.tornadic=tornadic||best.tornadic&&Math.random()<0.92;}
+    else storms.push({id:stormId++,name:stormNames[nameIndex++%stormNames.length],x:c.x,y:c.y,intensity:c.intensity,rot:c.rot,size:c.size,age:0,path:[],missed:0,tornadic});
+  }
+  for(let i=storms.length-1;i>=0;i--){const s=storms[i]; s.path.push([s.x,s.y]); if(s.path.length>80)s.path.shift(); s.classification=classifyStorm(s.intensity,s.rot,s.tornadic,s.y/sim.rows,s.size); if(s.missed>18||s.intensity<0.05)storms.splice(i,1);}
+}
+
+function drawStormUI(){
+  ctx.lineWidth=1.2; ctx.font='11px Segoe UI, Arial';
+  for(const s of storms){
+    if(s.path.length>1){ctx.strokeStyle='rgba(245,245,255,0.33)'; ctx.beginPath(); for(let i=0;i<s.path.length;i++){const [px,py]=s.path[i]; const X=px*sim.cell,Y=py*sim.cell; if(i===0)ctx.moveTo(X,Y); else ctx.lineTo(X,Y);} ctx.stroke();}
+    const sx=s.x*sim.cell, sy=s.y*sim.cell;
+    if(s.classification==='Supercell'||s.classification==='Tornadic'){ctx.strokeStyle='rgba(220,220,255,0.8)'; ctx.beginPath(); ctx.arc(sx,sy,6,0,Math.PI*2); ctx.stroke();}
+    if(s.classification==='Tornadic'){ctx.fillStyle='rgba(255,70,70,0.9)'; ctx.beginPath(); ctx.arc(sx+8,sy-8,3,0,Math.PI*2); ctx.fill();}
+    ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(sx+6,sy-18,94,24);
+    ctx.fillStyle='rgba(240,248,255,0.95)'; ctx.fillText('Storm '+s.name,sx+10,sy-8); ctx.fillStyle='rgba(212,224,255,0.9)'; ctx.fillText(s.classification,sx+10,sy+2);
   }
 }
 
-function renderRadar(){
-  const c=sim.cellSize;
-  for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
-    let v=sim.field[idx(x,y)]; if(v<0.28 && Math.random()<0.025) v*=0.1;
-    const col=colorFor(v); if(!col) continue;
-    ctx.fillStyle=col; ctx.fillRect(x*c,y*c,c,c);
-  }
-}
-
-function drawPressureMarkers(){
-  ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  for(let y=4;y<sim.rows-4;y+=18)for(let x=4;x<sim.cols-4;x+=18){
-    const id=idx(x,y), v=sim.pressureField[id];
-    const n=sample(sim.pressureField,x,y-1),s=sample(sim.pressureField,x,y+1),e=sample(sim.pressureField,x+1,y),w=sample(sim.pressureField,x-1,y);
-    if(v<n&&v<s&&v<e&&v<w&&v<0.35){ctx.fillStyle='rgba(235,235,235,0.42)';ctx.fillText('L',x*sim.cellSize,y*sim.cellSize);} 
-    else if(v>n&&v>s&&v>e&&v>w&&v>0.65){ctx.fillStyle='rgba(235,235,235,0.42)';ctx.fillText('H',x*sim.cellSize,y*sim.cellSize);} 
-  }
-}
-
-function render(){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  drawMap();
-  if(radarOnly){
-    renderRadar();
-  }else if(viewMode==='combined'){
-    renderFieldOverlay('pressure',true);
-    renderFieldOverlay('moisture',true);
-    renderFieldOverlay('temperature',true);
-    renderFieldOverlay('shear',true);
-    drawPressureMarkers();
-    renderRadar();
-  }else{
-    renderFieldOverlay(viewMode,false);
-  }
-  ctx.fillStyle='rgba(255,255,255,0.02)';ctx.fillRect(0,0,canvas.width,canvas.height);
-}
-function tick(){sim.frame++; if(mouseDown) injectTool(mouseX, mouseY); if(sim.frame%2===0)updateField(); render(); requestAnimationFrame(tick)}
-canvas.addEventListener('mousedown',e=>{mouseDown=true; const r=canvas.getBoundingClientRect(); mouseX=e.clientX-r.left; mouseY=e.clientY-r.top; injectTool(mouseX, mouseY);});
-canvas.addEventListener('mouseup',()=>{mouseDown=false;});
-canvas.addEventListener('mouseleave',()=>{mouseDown=false;});
-canvas.addEventListener('mousemove',e=>{const r=canvas.getBoundingClientRect(); mouseX=e.clientX-r.left; mouseY=e.clientY-r.top;});
-addEventListener('keydown',e=>{
-  if(e.key==='1'){viewMode='combined'; radarOnly=false;}
-  else if(e.key==='2'){radarOnly=!radarOnly;}
-  else if(e.key==='3'){viewMode='pressure'; radarOnly=false;}
-  else if(e.key==='4'){viewMode='temperature'; radarOnly=false;}
-  else if(e.key==='5'){viewMode='moisture'; radarOnly=false;}
-  else if(e.key==='6'){viewMode='shear'; radarOnly=false;}
-});
-addEventListener('resize',resize); buildToolbar(); resize(); tick();
+function radarColor(v){if(v<0.08)return null; const j=0.9+Math.random()*0.15; if(v<0.35)return `rgba(46,205,103,${(0.22+v*1.2)*j})`; if(v<0.65)return `rgba(242,226,75,${(0.38+(v-0.35)*1.4)*j})`; return `rgba(231,57,57,${(0.58+(v-0.65)*1.5)*j})`;}
+function draw(){ctx.clearRect(0,0,canvas.width,canvas.height); if(map.complete&&map.naturalWidth>0){ctx.drawImage(map,0,0,canvas.width,canvas.height);} ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fillRect(0,0,canvas.width,canvas.height);
+ const c=sim.cell; for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){let v=sim.field[idx(x,y)]; if(v<0.25&&Math.random()<0.03)v*=0.1; const col=radarColor(v); if(!col)continue; ctx.fillStyle=col; ctx.fillRect(x*c,y*c,c,c);} drawStormUI(); }
+function tick(){if(mouseDown)spawnStorm(mx,my); update(); if(sim.time%4===0)updateStormTracking(); draw(); requestAnimationFrame(tick)}
+canvas.onmousedown=e=>{mouseDown=true;const r=canvas.getBoundingClientRect();mx=e.clientX-r.left;my=e.clientY-r.top;spawnStorm(mx,my)};canvas.onmouseup=()=>mouseDown=false;canvas.onmouseleave=()=>mouseDown=false;canvas.onmousemove=e=>{const r=canvas.getBoundingClientRect();mx=e.clientX-r.left;my=e.clientY-r.top};
+tick();
 </script></body></html>
