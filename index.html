@@ -18,7 +18,7 @@ const canvas = document.getElementById('radar'), ctx = canvas.getContext('2d'), 
 const mapImage = new Image(); mapImage.crossOrigin='anonymous'; mapImage.src='https://upload.wikimedia.org/wikipedia/commons/8/80/Equirectangular-projection.jpg';
 const TOOLS=['high_pressure','low_pressure','moisture','temperature','wind_shear','cold_front','warm_front','dryline','supercell'];
 const TOOL_LABEL={high_pressure:'High Pressure',low_pressure:'Low Pressure',moisture:'Moisture',temperature:'Temperature',wind_shear:'Wind Shear',cold_front:'Cold Front',warm_front:'Warm Front',dryline:'Dryline',supercell:'Supercell'};
-const sim={cellSize:3,cols:0,rows:0,field:null,next:null,rotationField:null,rotationNext:null,pressureField:null,temperatureField:null,humidityField:null,shearField:null,threshold:0.08,time:0,frame:0,tool:'low_pressure'};
+const sim={cellSize:3,cols:0,rows:0,field:null,next:null,rotationField:null,rotationNext:null,pressureField:null,temperatureField:null,humidityField:null,shearField:null,windXField:null,windYField:null,threshold:0.08,time:0,frame:0,tool:'low_pressure'};
 const idx=(x,y)=>y*sim.cols+x, sample=(f,x,y)=>(x<0||y<0||x>=sim.cols||y>=sim.rows)?0:f[idx(x,y)];
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 function noise(x,y,t=0){const v=Math.sin(x*12.9898+y*78.233+t*3.71)*43758.5453;return v-Math.floor(v);}
@@ -29,7 +29,7 @@ function buildToolbar(){
 function setTool(t){sim.tool=t; TOOLS.forEach(k=>document.getElementById('tool_'+k)?.classList.toggle('active',k===t)); document.getElementById('status').textContent='Tool: '+TOOL_LABEL[t].toUpperCase();}
 function initFields(){
   const n=sim.cols*sim.rows; sim.field=new Float32Array(n); sim.next=new Float32Array(n); sim.rotationField=new Float32Array(n); sim.rotationNext=new Float32Array(n);
-  sim.pressureField=new Float32Array(n); sim.temperatureField=new Float32Array(n); sim.humidityField=new Float32Array(n); sim.shearField=new Float32Array(n);
+  sim.pressureField=new Float32Array(n); sim.temperatureField=new Float32Array(n); sim.humidityField=new Float32Array(n); sim.shearField=new Float32Array(n); sim.windXField=new Float32Array(n); sim.windYField=new Float32Array(n);
   for(let i=0;i<n;i++){sim.pressureField[i]=0.5; sim.temperatureField[i]=0.5; sim.humidityField[i]=0.5; sim.shearField[i]=0.3;}
 }
 function resize(){canvas.width=innerWidth; canvas.height=innerHeight; sim.cols=Math.ceil(canvas.width/sim.cellSize); sim.rows=Math.ceil(canvas.height/sim.cellSize); initFields();}
@@ -40,7 +40,7 @@ function applyFront(gx,gy,type){const ang=Math.PI*0.18, len=70, width=8; for(let
   if(type==='dryline'){sim.humidityField[id]=clamp(sim.humidityField[id]-(i>0?0.2:-0.02)*(1-t),0,1); sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.12*(1-t),0,1); sim.shearField[id]=clamp(sim.shearField[id]+0.25*(1-t),0,1); sim.pressureField[id]=clamp(sim.pressureField[id]-0.07*(1-t),0,1);} }}
 function injectTool(px,py){const gx=Math.floor(px/sim.cellSize), gy=Math.floor(py/sim.cellSize), r=12;
  if(sim.tool==='cold_front'||sim.tool==='warm_front'||sim.tool==='dryline') return applyFront(gx,gy,sim.tool);
- if(sim.tool==='supercell'){applyBrush(gx,gy,10,(id,f,xx,yy)=>{sim.humidityField[id]=clamp(sim.humidityField[id]+0.38*f,0,1);sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.33*f,0,1);sim.shearField[id]=clamp(sim.shearField[id]+0.45*f,0,1);sim.pressureField[id]=clamp(sim.pressureField[id]-0.28*f,0,1); const dx=xx-gx,dy=yy-gy,dist=Math.hypot(dx,dy)/10; const hook=Math.max(0,Math.cos(Math.atan2(dy,dx)-2.4))*Math.max(0,1-dist); sim.rotationField[id]=clamp(sim.rotationField[id]+0.95*f+hook*0.6,0,1);}); return;}
+ if(sim.tool==='supercell'){applyBrush(gx,gy,10,(id,f)=>{sim.humidityField[id]=clamp(sim.humidityField[id]+0.38*f,0,1);sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.33*f,0,1);sim.shearField[id]=clamp(sim.shearField[id]+0.45*f,0,1);sim.pressureField[id]=clamp(sim.pressureField[id]-0.28*f,0,1); sim.rotationField[id]=clamp(sim.rotationField[id]+0.42*f,0,1);}); return;}
  applyBrush(gx,gy,r,(id,f)=>{if(sim.tool==='high_pressure')sim.pressureField[id]=clamp(sim.pressureField[id]+0.22*f,0,1);
   if(sim.tool==='low_pressure')sim.pressureField[id]=clamp(sim.pressureField[id]-0.22*f,0,1);
   if(sim.tool==='moisture')sim.humidityField[id]=clamp(sim.humidityField[id]+0.26*f,0,1);
@@ -48,29 +48,44 @@ function injectTool(px,py){const gx=Math.floor(px/sim.cellSize), gy=Math.floor(p
   if(sim.tool==='wind_shear')sim.shearField[id]=clamp(sim.shearField[id]+0.22*f,0,1);});
 }
 function updateField(){
+  const WIND_STRENGTH=2.2, WIND_CLAMP=1.15;
   for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
-    const id=idx(x,y), p=sim.pressureField[id], h=sim.humidityField[id], t=sim.temperatureField[id], sh=sim.shearField[id], rot=sim.rotationField[id];
+    const id=idx(x,y);
+    const dPx=sample(sim.pressureField,x+1,y)-sample(sim.pressureField,x-1,y);
+    const dPy=sample(sim.pressureField,x,y+1)-sample(sim.pressureField,x,y-1);
+    let wx=-dPx*WIND_STRENGTH, wy=-dPy*WIND_STRENGTH;
+    const mag=Math.hypot(wx,wy);
+    if(mag>WIND_CLAMP){const k=WIND_CLAMP/mag; wx*=k; wy*=k;}
+    sim.windXField[id]=wx; sim.windYField[id]=wy;
+  }
+  for(let y=1;y<sim.rows-1;y++)for(let x=1;x<sim.cols-1;x++){
+    const id=idx(x,y);
+    sim.windXField[id]=(sim.windXField[id]+sim.windXField[idx(x-1,y)]+sim.windXField[idx(x+1,y)]+sim.windXField[idx(x,y-1)]+sim.windXField[idx(x,y+1)])*0.2;
+    sim.windYField[id]=(sim.windYField[id]+sim.windYField[idx(x-1,y)]+sim.windYField[idx(x+1,y)]+sim.windYField[idx(x,y-1)]+sim.windYField[idx(x,y+1)])*0.2;
+  }
+
+  for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
+    const id=idx(x,y), h=sim.humidityField[id], t=sim.temperatureField[id], sh=sim.shearField[id], rot=sim.rotationField[id];
+    const wx=sim.windXField[id], wy=sim.windYField[id];
     const n=sample(sim.field,x,y-1),s=sample(sim.field,x,y+1),e=sample(sim.field,x+1,y),w=sample(sim.field,x-1,y),avg=(n+s+e+w)*0.25;
-    const dpdx=sample(sim.pressureField,x+1,y)-sample(sim.pressureField,x-1,y), dpdy=sample(sim.pressureField,x,y+1)-sample(sim.pressureField,x,y-1);
-    let wx=-dpdx*3.0 + (noise(x*0.2,y*0.2,sim.time*0.02)-0.5)*0.25, wy=-dpdy*3.0 + (noise(x*0.2+4,y*0.2+9,sim.time*0.02)-0.5)*0.18;
-    const dx=x-Math.floor(sim.cols*0.5), dy=y-Math.floor(sim.rows*0.5), swirl=rot*(0.45+sh*0.65); wx += -dy*0.0008*swirl; wy += dx*0.0008*swirl;
     const ax=x-wx, ay=y-wy, fx=Math.floor(ax), fy=Math.floor(ay), tx=ax-fx, ty=ay-fy;
     const a00=sample(sim.field,fx,fy),a10=sample(sim.field,fx+1,fy),a01=sample(sim.field,fx,fy+1),a11=sample(sim.field,fx+1,fy+1);
     const adv=(a00*(1-tx)+a10*tx)*(1-ty)+(a01*(1-tx)+a11*tx)*ty;
-    const instability=clamp(h*t*(1-p),0,1); let val=sim.field[id]*0.10+avg*0.46+adv*0.44;
-    if(instability>0.18) val += instability*0.055;
-    val += (val*val)*(0.015+instability*0.04);
-    val += Math.max(0,rot)*Math.max(0,sh-0.45)*0.02; // hook/core maintenance
-    val *= (0.987 + (0.5-p)*0.012); // low pressure boost, high pressure suppress
-    if(Math.abs(sim.field[id]-avg)>0.08 && Math.random()<0.13) val*=0.84; // edge breakup
-    if(val<0.28 && Math.random()<0.03) val*=0.05; // dropout
-    val += (Math.random()*2-1)*0.01; // grain
 
-    // tornado emergence (not direct spawn)
-    if(rot>0.72 && p<0.35 && h>0.7 && sh>0.65 && sim.field[id]>0.65){
-      val = clamp(val+0.08,0,1); sim.rotationNext[id]=clamp(rot+0.06,0,1);
-    } else sim.rotationNext[id]=clamp((rot*0.985 + sh*0.003) + (Math.random()*2-1)*0.0015,0,1);
+    const div=(sample(sim.windXField,x+1,y)-sample(sim.windXField,x-1,y))+(sample(sim.windYField,x,y+1)-sample(sim.windYField,x,y-1));
+    const convergence=Math.max(0,-div*0.5), divergence=Math.max(0,div*0.5);
+    let val=sim.field[id]*0.12+avg*0.42+adv*0.46;
+    const growth=convergence*h*t;
+    if(growth>0.02) val+=growth*0.12;
+    val-=divergence*(0.04+0.03*(1-h));
+    val += Math.max(0,rot)*Math.max(0,sh-0.45)*0.014;
+    val += (val*val)*(0.012+growth*0.03);
+    if(Math.abs(sim.field[id]-avg)>0.08 && Math.random()<0.13) val*=0.84;
+    if(val<0.28 && Math.random()<0.03) val*=0.05;
+    val += (Math.random()*2-1)*0.008;
 
+    if(rot>0.72 && sample(sim.pressureField,x,y)<0.35 && h>0.7 && sh>0.65 && sim.field[id]>0.65){ val = clamp(val+0.06,0,1); sim.rotationNext[id]=clamp(rot+0.05,0,1); }
+    else sim.rotationNext[id]=clamp((rot*0.986 + sh*0.0025) + (Math.random()*2-1)*0.0012,0,1);
     sim.next[id]=clamp(val,0,1);
   }
   const tmp=sim.field; sim.field=sim.next; sim.next=tmp; const rt=sim.rotationField; sim.rotationField=sim.rotationNext; sim.rotationNext=rt; sim.time++;
