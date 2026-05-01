@@ -1,267 +1,84 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Doppler Radar Simulation</title>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Doppler Radar Weather Sandbox</title>
   <style>
     :root { --ui-bg: rgba(12,18,28,.82); --ui-border: rgba(180,210,255,.25); --ui-text:#e7f0ff; --ui-muted:#9fb3d1; }
     html,body{margin:0;width:100%;height:100%;background:#070b12;overflow:hidden;font-family:Inter,Segoe UI,Arial,sans-serif;color:var(--ui-text)}
-    #app{position:relative;width:100%;height:100%}
-    canvas{position:absolute;inset:0;width:100%;height:100%;display:block;image-rendering:pixelated}
-    .toolbar{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);width:min(1080px,calc(100% - 20px));padding:10px 12px;border-radius:12px;border:1px solid var(--ui-border);background:var(--ui-bg);backdrop-filter:blur(4px);display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:space-between;z-index:10}
-    .group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.label{font-size:12px;color:var(--ui-muted);text-transform:uppercase;letter-spacing:.06em}
-    button,select{border:1px solid var(--ui-border);background:rgba(18,30,46,.95);color:var(--ui-text);padding:7px 10px;border-radius:8px;font-size:13px;cursor:pointer}
-    button.active{border-color:rgba(253,128,128,.8);box-shadow:0 0 0 1px rgba(253,128,128,.4) inset}
-    .pill{padding:4px 8px;border-radius:999px;background:rgba(30,52,78,.9);border:1px solid var(--ui-border);font-size:12px;color:#d0e6ff}
+    #app{position:relative;width:100%;height:100%} canvas{position:absolute;inset:0;width:100%;height:100%;display:block;image-rendering:pixelated}
+    .toolbar{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);width:min(1240px,calc(100% - 20px));padding:10px;border:1px solid var(--ui-border);border-radius:12px;background:var(--ui-bg);display:flex;gap:8px;flex-wrap:wrap;z-index:10}
+    button{border:1px solid var(--ui-border);background:rgba(18,30,46,.95);color:var(--ui-text);padding:7px 9px;border-radius:8px;font-size:12px;cursor:pointer}
+    button.active{border-color:rgba(120,220,255,.95);box-shadow:inset 0 0 0 1px rgba(120,220,255,.35)} .pill{padding:6px 10px;font-size:12px;color:#b9d8ff}
   </style>
 </head>
-<body>
-  <div id="app">
-    <canvas id="radar"></canvas>
-    <div class="toolbar">
-      <div class="group"><span class="label">Preset</span><select id="preset"><option value="calm">Calm</option><option value="seasonal" selected>Seasonal</option><option value="active">Active</option><option value="severe">Severe</option></select></div>
-      <div class="group"><span class="label">Click Mode</span><button id="normalMode" class="active">Normal Storm</button><button id="supercellMode">Supercell</button></div>
-      <div class="group"><span class="label">Wind</span><button id="windToggle">Wind: On</button></div>
-      <div class="group"><span class="pill" id="status">Initializing radar field…</span></div>
-    </div>
-  </div>
-  <script>
-    const canvas = document.getElementById('radar');
-    const ctx = canvas.getContext('2d');
-    const presetSelect = document.getElementById('preset');
-    const windToggleBtn = document.getElementById('windToggle');
-    const normalModeBtn = document.getElementById('normalMode');
-    const supercellModeBtn = document.getElementById('supercellMode');
-    const statusEl = document.getElementById('status');
+<body><div id="app"><canvas id="radar"></canvas><div class="toolbar" id="toolbar"></div></div>
+<script>
+const canvas = document.getElementById('radar'), ctx = canvas.getContext('2d'), toolbar = document.getElementById('toolbar');
+const mapImage = new Image(); mapImage.crossOrigin='anonymous'; mapImage.src='https://upload.wikimedia.org/wikipedia/commons/8/80/Equirectangular-projection.jpg';
+const TOOLS=['high_pressure','low_pressure','moisture','temperature','wind_shear','cold_front','warm_front','dryline','supercell'];
+const TOOL_LABEL={high_pressure:'High Pressure',low_pressure:'Low Pressure',moisture:'Moisture',temperature:'Temperature',wind_shear:'Wind Shear',cold_front:'Cold Front',warm_front:'Warm Front',dryline:'Dryline',supercell:'Supercell'};
+const sim={cellSize:3,cols:0,rows:0,field:null,next:null,rotationField:null,rotationNext:null,pressureField:null,temperatureField:null,humidityField:null,shearField:null,threshold:0.08,time:0,frame:0,tool:'low_pressure'};
+const idx=(x,y)=>y*sim.cols+x, sample=(f,x,y)=>(x<0||y<0||x>=sim.cols||y>=sim.rows)?0:f[idx(x,y)];
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function noise(x,y,t=0){const v=Math.sin(x*12.9898+y*78.233+t*3.71)*43758.5453;return v-Math.floor(v);}
+function buildToolbar(){
+  toolbar.innerHTML=''; TOOLS.forEach(t=>{const b=document.createElement('button');b.textContent=TOOL_LABEL[t];b.onclick=()=>setTool(t);b.id='tool_'+t;toolbar.appendChild(b)});
+  const s=document.createElement('span');s.className='pill';s.id='status';s.textContent='Tool: LOW PRESSURE';toolbar.appendChild(s); setTool(sim.tool);
+}
+function setTool(t){sim.tool=t; TOOLS.forEach(k=>document.getElementById('tool_'+k)?.classList.toggle('active',k===t)); document.getElementById('status').textContent='Tool: '+TOOL_LABEL[t].toUpperCase();}
+function initFields(){
+  const n=sim.cols*sim.rows; sim.field=new Float32Array(n); sim.next=new Float32Array(n); sim.rotationField=new Float32Array(n); sim.rotationNext=new Float32Array(n);
+  sim.pressureField=new Float32Array(n); sim.temperatureField=new Float32Array(n); sim.humidityField=new Float32Array(n); sim.shearField=new Float32Array(n);
+  for(let i=0;i<n;i++){sim.pressureField[i]=0.5; sim.temperatureField[i]=0.5; sim.humidityField[i]=0.5; sim.shearField[i]=0.3;}
+}
+function resize(){canvas.width=innerWidth; canvas.height=innerHeight; sim.cols=Math.ceil(canvas.width/sim.cellSize); sim.rows=Math.ceil(canvas.height/sim.cellSize); initFields();}
+function applyBrush(gx,gy,r,fn){for(let y=gy-r;y<=gy+r;y++)for(let x=gx-r;x<=gx+r;x++){if(x<0||y<0||x>=sim.cols||y>=sim.rows)continue; const d2=(x-gx)**2+(y-gy)**2;if(d2>r*r)continue; fn(idx(x,y),1-d2/(r*r),x,y);}}
+function applyFront(gx,gy,type){const ang=Math.PI*0.18, len=70, width=8; for(let i=-len;i<=len;i++)for(let w=-width;w<=width;w++){const x=Math.floor(gx+i*Math.cos(ang)-w*Math.sin(ang)), y=Math.floor(gy+i*Math.sin(ang)+w*Math.cos(ang)); if(x<0||y<0||x>=sim.cols||y>=sim.rows)continue; const id=idx(x,y), t=Math.abs(w)/width;
+  if(type==='cold_front'){sim.temperatureField[id]=clamp(sim.temperatureField[id]-0.22*(1-t),0,1); sim.humidityField[id]=clamp(sim.humidityField[id]+0.10*(1-t),0,1); sim.pressureField[id]=clamp(sim.pressureField[id]-0.06*(1-t),0,1);} 
+  if(type==='warm_front'){sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.15*(1-t),0,1); sim.humidityField[id]=clamp(sim.humidityField[id]+0.07*(1-t),0,1);}
+  if(type==='dryline'){sim.humidityField[id]=clamp(sim.humidityField[id]-(i>0?0.2:-0.02)*(1-t),0,1); sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.12*(1-t),0,1); sim.shearField[id]=clamp(sim.shearField[id]+0.25*(1-t),0,1); sim.pressureField[id]=clamp(sim.pressureField[id]-0.07*(1-t),0,1);} }}
+function injectTool(px,py){const gx=Math.floor(px/sim.cellSize), gy=Math.floor(py/sim.cellSize), r=12;
+ if(sim.tool==='cold_front'||sim.tool==='warm_front'||sim.tool==='dryline') return applyFront(gx,gy,sim.tool);
+ if(sim.tool==='supercell'){applyBrush(gx,gy,10,(id,f,xx,yy)=>{sim.humidityField[id]=clamp(sim.humidityField[id]+0.38*f,0,1);sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.33*f,0,1);sim.shearField[id]=clamp(sim.shearField[id]+0.45*f,0,1);sim.pressureField[id]=clamp(sim.pressureField[id]-0.28*f,0,1); const dx=xx-gx,dy=yy-gy,dist=Math.hypot(dx,dy)/10; const hook=Math.max(0,Math.cos(Math.atan2(dy,dx)-2.4))*Math.max(0,1-dist); sim.rotationField[id]=clamp(sim.rotationField[id]+0.95*f+hook*0.6,0,1);}); return;}
+ applyBrush(gx,gy,r,(id,f)=>{if(sim.tool==='high_pressure')sim.pressureField[id]=clamp(sim.pressureField[id]+0.22*f,0,1);
+  if(sim.tool==='low_pressure')sim.pressureField[id]=clamp(sim.pressureField[id]-0.22*f,0,1);
+  if(sim.tool==='moisture')sim.humidityField[id]=clamp(sim.humidityField[id]+0.26*f,0,1);
+  if(sim.tool==='temperature')sim.temperatureField[id]=clamp(sim.temperatureField[id]+0.24*f,0,1);
+  if(sim.tool==='wind_shear')sim.shearField[id]=clamp(sim.shearField[id]+0.22*f,0,1);});
+}
+function updateField(){
+  for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
+    const id=idx(x,y), p=sim.pressureField[id], h=sim.humidityField[id], t=sim.temperatureField[id], sh=sim.shearField[id], rot=sim.rotationField[id];
+    const n=sample(sim.field,x,y-1),s=sample(sim.field,x,y+1),e=sample(sim.field,x+1,y),w=sample(sim.field,x-1,y),avg=(n+s+e+w)*0.25;
+    const dpdx=sample(sim.pressureField,x+1,y)-sample(sim.pressureField,x-1,y), dpdy=sample(sim.pressureField,x,y+1)-sample(sim.pressureField,x,y-1);
+    let wx=-dpdx*3.0 + (noise(x*0.2,y*0.2,sim.time*0.02)-0.5)*0.25, wy=-dpdy*3.0 + (noise(x*0.2+4,y*0.2+9,sim.time*0.02)-0.5)*0.18;
+    const dx=x-Math.floor(sim.cols*0.5), dy=y-Math.floor(sim.rows*0.5), swirl=rot*(0.45+sh*0.65); wx += -dy*0.0008*swirl; wy += dx*0.0008*swirl;
+    const ax=x-wx, ay=y-wy, fx=Math.floor(ax), fy=Math.floor(ay), tx=ax-fx, ty=ay-fy;
+    const a00=sample(sim.field,fx,fy),a10=sample(sim.field,fx+1,fy),a01=sample(sim.field,fx,fy+1),a11=sample(sim.field,fx+1,fy+1);
+    const adv=(a00*(1-tx)+a10*tx)*(1-ty)+(a01*(1-tx)+a11*tx)*ty;
+    const instability=clamp(h*t*(1-p),0,1); let val=sim.field[id]*0.10+avg*0.46+adv*0.44;
+    if(instability>0.18) val += instability*0.055;
+    val += (val*val)*(0.015+instability*0.04);
+    val += Math.max(0,rot)*Math.max(0,sh-0.45)*0.02; // hook/core maintenance
+    val *= (0.987 + (0.5-p)*0.012); // low pressure boost, high pressure suppress
+    if(Math.abs(sim.field[id]-avg)>0.08 && Math.random()<0.13) val*=0.84; // edge breakup
+    if(val<0.28 && Math.random()<0.03) val*=0.05; // dropout
+    val += (Math.random()*2-1)*0.01; // grain
 
-    const mapImage = new Image();
-    mapImage.crossOrigin = 'anonymous';
-    mapImage.src = 'https://upload.wikimedia.org/wikipedia/commons/8/80/Equirectangular-projection.jpg';
+    // tornado emergence (not direct spawn)
+    if(rot>0.72 && p<0.35 && h>0.7 && sh>0.65 && sim.field[id]>0.65){
+      val = clamp(val+0.08,0,1); sim.rotationNext[id]=clamp(rot+0.06,0,1);
+    } else sim.rotationNext[id]=clamp((rot*0.985 + sh*0.003) + (Math.random()*2-1)*0.0015,0,1);
 
-    const sim = { cellSize: 3, cols: 0, rows: 0, field: null, next: null, rotationField: null, rotationNext: null, energyField: null, threshold: 0.08, windEnabled: true, clickMode: 'normal', time: 0, frame: 0, config: {} };
-
-    const PRESETS = {
-      calm: { diffusion: 0.91, growth: 0.010, decay: 0.9925, rotDecay: 0.989, spawnChance: 0.0013, spawnBoost: 0.18, noise: 0.010, wind: 0.8 },
-      seasonal: { diffusion: 0.93, growth: 0.014, decay: 0.9905, rotDecay: 0.988, spawnChance: 0.0022, spawnBoost: 0.22, noise: 0.014, wind: 1.2 },
-      active: { diffusion: 0.95, growth: 0.018, decay: 0.9885, rotDecay: 0.986, spawnChance: 0.0030, spawnBoost: 0.27, noise: 0.019, wind: 1.5 },
-      severe: { diffusion: 0.96, growth: 0.024, decay: 0.9863, rotDecay: 0.984, spawnChance: 0.0042, spawnBoost: 0.34, noise: 0.024, wind: 1.8 }
-    };
-
-    const idx = (x, y) => y * sim.cols + x;
-    const sample = (field, x, y) => (x < 0 || y < 0 || x >= sim.cols || y >= sim.rows) ? 0 : field[idx(x, y)];
-
-    function hashNoise(x, y, t = 0) {
-      const v = Math.sin(x * 12.9898 + y * 78.233 + t * 9.73) * 43758.5453;
-      return v - Math.floor(v);
-    }
-
-    function smoothNoise(x, y, t = 0) {
-      const x0 = Math.floor(x), y0 = Math.floor(y);
-      const fx = x - x0, fy = y - y0;
-      const n00 = hashNoise(x0, y0, t), n10 = hashNoise(x0 + 1, y0, t);
-      const n01 = hashNoise(x0, y0 + 1, t), n11 = hashNoise(x0 + 1, y0 + 1, t);
-      const ix0 = n00 * (1 - fx) + n10 * fx;
-      const ix1 = n01 * (1 - fx) + n11 * fx;
-      return ix0 * (1 - fy) + ix1 * fy;
-    }
-
-    function applyPreset(name) {
-      sim.config = { ...PRESETS[name] };
-      statusEl.textContent = `Preset: ${name.toUpperCase()} | Mode: ${sim.clickMode.toUpperCase()}`;
-    }
-
-    function buildEnergyField() {
-      sim.energyField = new Float32Array(sim.cols * sim.rows);
-      for (let y = 0; y < sim.rows; y++) {
-        for (let x = 0; x < sim.cols; x++) {
-          const n = smoothNoise(x * 0.05, y * 0.05, 0.2);
-          sim.energyField[idx(x, y)] = 0.78 + n * 0.55;
-        }
-      }
-    }
-
-    function seedInitialField() {
-      sim.field.fill(0); sim.rotationField.fill(0);
-      for (let i = 0; i < sim.field.length; i++) if (Math.random() < 0.006) sim.field[i] = Math.random() * 0.18;
-    }
-
-    function resize() {
-      canvas.width = innerWidth; canvas.height = innerHeight;
-      sim.cols = Math.ceil(canvas.width / sim.cellSize); sim.rows = Math.ceil(canvas.height / sim.cellSize);
-      sim.field = new Float32Array(sim.cols * sim.rows); sim.next = new Float32Array(sim.cols * sim.rows);
-      sim.rotationField = new Float32Array(sim.cols * sim.rows); sim.rotationNext = new Float32Array(sim.cols * sim.rows);
-      buildEnergyField();
-      seedInitialField();
-    }
-
-    function windVector(x, y, t) {
-      const lat = y / sim.rows;
-      const baseJet = Math.sin((lat * Math.PI * 3.3) + t * 0.006) * 0.9;
-      const cx = (smoothNoise(x * 0.03, y * 0.03, t * 0.01) - 0.5) * 1.2;
-      const cy = (smoothNoise(x * 0.03 + 41, y * 0.03 + 93, t * 0.01) - 0.5) * 0.9;
-      const scale = sim.windEnabled ? sim.config.wind : 0;
-      return { x: (baseJet + cx) * scale, y: cy * scale * 0.45 };
-    }
-
-    function updateField() {
-      const { diffusion, growth, decay, rotDecay, spawnChance, spawnBoost, noise } = sim.config;
-      const src = sim.field, dst = sim.next, rotSrc = sim.rotationField, rotDst = sim.rotationNext;
-
-      for (let y = 0; y < sim.rows; y++) {
-        for (let x = 0; x < sim.cols; x++) {
-          const id = idx(x, y);
-          const self = src[id];
-          const n = sample(src, x, y - 1), s = sample(src, x, y + 1), e = sample(src, x + 1, y), w = sample(src, x - 1, y);
-          const ne = sample(src, x + 1, y - 1), nw = sample(src, x - 1, y - 1), se = sample(src, x + 1, y + 1), sw = sample(src, x - 1, y + 1);
-          const avg = (n + s + e + w + ne + nw + se + sw) * 0.125;
-          const diffused = self * (1 - diffusion) + avg * diffusion;
-
-          const rot = rotSrc[id];
-          const gradX = sample(rotSrc, x + 1, y) - sample(rotSrc, x - 1, y);
-          const gradY = sample(rotSrc, x, y + 1) - sample(rotSrc, x, y - 1);
-          const vector = windVector(x, y, sim.time);
-
-          const curveX = -gradY * 1.7 + rot * 0.55;
-          const curveY = gradX * 1.7 + rot * 0.40;
-          const ax = x - vector.x - curveX;
-          const ay = y - vector.y - curveY;
-
-          const fx = Math.floor(ax), fy = Math.floor(ay), tx = ax - fx, ty = ay - fy;
-          const s00 = sample(src, fx, fy), s10 = sample(src, fx + 1, fy), s01 = sample(src, fx, fy + 1), s11 = sample(src, fx + 1, fy + 1);
-          const adv = (s00 * (1 - tx) + s10 * tx) * (1 - ty) + (s01 * (1 - tx) + s11 * tx) * ty;
-
-          const rotAvg = (sample(rotSrc, x, y - 1) + sample(rotSrc, x, y + 1) + sample(rotSrc, x + 1, y) + sample(rotSrc, x - 1, y)) * 0.25;
-          const rotAdvection = sample(rotSrc, Math.floor(ax), Math.floor(ay));
-          let nextRot = (rot * 0.70 + rotAvg * 0.18 + rotAdvection * 0.12) * rotDecay + (Math.random() * 2 - 1) * 0.003;
-
-          let value = (diffused * 0.56 + adv * 0.44);
-          value += (value * value) * growth; // nonlinear core growth
-          value += Math.max(0, rot) * Math.max(0, gradX - gradY) * 0.65; // hook tendency
-
-          value *= decay;
-          value *= sim.energyField[id]; // energy zones
-          value += (Math.random() * 2 - 1) * noise; // grain noise
-
-          // edge breakup + dropout
-          const edgeStrength = Math.abs(self - avg);
-          if (edgeStrength > 0.07 && Math.random() < 0.18) value *= 0.78;
-          if (value < 0.32 && Math.random() < 0.035) value *= 0.08;
-
-          // burst instability
-          if (value > 0.15 && Math.random() < 0.0025) value *= 1.35 + Math.random() * 0.25;
-
-          if (Math.random() < spawnChance) value += Math.random() * spawnBoost;
-
-          dst[id] = Math.min(1, Math.max(0, value < 0.01 ? 0 : value));
-          rotDst[id] = Math.max(-1, Math.min(1, nextRot));
-        }
-      }
-      sim.field = dst; sim.next = src; sim.rotationField = rotDst; sim.rotationNext = rotSrc; sim.time++;
-    }
-
-    function colorFor(v, rot) {
-      if (v < sim.threshold) return null;
-      const flicker = 0.90 + Math.random() * 0.20;
-      if (v < 0.35) return `rgba(46,205,103,${Math.min(0.78,(0.22 + v * 1.25) * flicker).toFixed(3)})`;
-      if (v < 0.65) return `rgba(242,226,75,${Math.min(0.86,(0.38 + (v - 0.35) * 1.55) * flicker).toFixed(3)})`;
-      const redBoost = rot > 0.3 ? 28 : 0;
-      return `rgba(${Math.min(255, 231 + redBoost)},57,57,${Math.min(0.94,(0.56 + (v - 0.65) * 1.7) * flicker).toFixed(3)})`;
-    }
-
-    function drawMap() {
-      if (mapImage.complete && mapImage.naturalWidth > 0) {
-        ctx.globalAlpha = 0.7;
-        ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
-        ctx.globalAlpha = 1;
-      }
-      ctx.fillStyle = 'rgba(8,16,28,0.24)'; // blue tint / desat feel
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = 'rgba(0,0,0,0.30)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-
-    function renderRadar() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawMap();
-      const cell = sim.cellSize;
-      for (let y = 0; y < sim.rows; y++) {
-        for (let x = 0; x < sim.cols; x++) {
-          const id = idx(x, y);
-          const color = colorFor(sim.field[id], sim.rotationField[id]);
-          if (!color) continue;
-          ctx.fillStyle = color;
-          ctx.fillRect(x * cell, y * cell, cell, cell);
-        }
-      }
-
-      // subtle blur + sharpen pass while preserving pixel look
-      ctx.save();
-      ctx.filter = 'blur(0.45px)';
-      ctx.globalAlpha = 0.12;
-      ctx.drawImage(canvas, 0, 0);
-      ctx.restore();
-      ctx.globalCompositeOperation = 'overlay';
-      ctx.fillStyle = 'rgba(255,255,255,0.04)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.globalCompositeOperation = 'source-over';
-    }
-
-    function injectEnergy(screenX, screenY) {
-      const gx = Math.floor(screenX / sim.cellSize), gy = Math.floor(screenY / sim.cellSize), radius = 8;
-      for (let y = gy - radius; y <= gy + radius; y++) for (let x = gx - radius; x <= gx + radius; x++) {
-        if (x < 0 || y < 0 || x >= sim.cols || y >= sim.rows) continue;
-        const d2 = (x - gx) ** 2 + (y - gy) ** 2; if (d2 > radius * radius) continue;
-        const falloff = 1 - d2 / (radius * radius), boost = falloff * (0.11 + Math.random() * 0.20);
-        sim.field[idx(x, y)] = Math.min(1, sim.field[idx(x, y)] + boost);
-      }
-    }
-
-    function injectSupercell(screenX, screenY) {
-      const gx = Math.floor(screenX / sim.cellSize), gy = Math.floor(screenY / sim.cellSize), radius = 10;
-      for (let y = gy - radius; y <= gy + radius; y++) for (let x = gx - radius; x <= gx + radius; x++) {
-        if (x < 0 || y < 0 || x >= sim.cols || y >= sim.rows) continue;
-        const dx = x - gx, dy = y - gy, d2 = dx * dx + dy * dy; if (d2 > radius * radius) continue;
-        const dist = Math.sqrt(d2) / radius, angle = Math.atan2(dy, dx);
-        const core = Math.max(0, 1 - dist * 1.8);
-        const inflow = Math.max(0, 1 - Math.abs(dy + dx * 0.55) / radius);
-        const hook = Math.max(0, Math.cos(angle - 2.4)) * Math.max(0, 1 - dist * 0.9);
-        sim.field[idx(x, y)] = Math.min(1, sim.field[idx(x, y)] + core * 0.72 + inflow * 0.26 + hook * 0.34);
-        sim.rotationField[idx(x, y)] = Math.min(1, sim.rotationField[idx(x, y)] + core * 0.95 + hook * 0.70);
-      }
-    }
-
-    function setMode(mode) {
-      sim.clickMode = mode;
-      normalModeBtn.classList.toggle('active', mode === 'normal');
-      supercellModeBtn.classList.toggle('active', mode === 'supercell');
-      statusEl.textContent = `Preset: ${presetSelect.value.toUpperCase()} | Mode: ${mode.toUpperCase()}`;
-    }
-
-    function tick() {
-      sim.frame++;
-      if (sim.frame % 3 === 0) updateField(); // scan-cycle update cadence
-      renderRadar();
-      requestAnimationFrame(tick);
-    }
-
-    canvas.addEventListener('click', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left, y = e.clientY - rect.top;
-      sim.clickMode === 'supercell' ? injectSupercell(x, y) : injectEnergy(x, y);
-    });
-
-    presetSelect.addEventListener('change', () => applyPreset(presetSelect.value));
-    windToggleBtn.addEventListener('click', () => { sim.windEnabled = !sim.windEnabled; windToggleBtn.textContent = `Wind: ${sim.windEnabled ? 'On' : 'Off'}`; });
-    normalModeBtn.addEventListener('click', () => setMode('normal'));
-    supercellModeBtn.addEventListener('click', () => setMode('supercell'));
-    addEventListener('resize', resize);
-
-    applyPreset('seasonal');
-    setMode('normal');
-    resize();
-    mapImage.addEventListener('load', () => { statusEl.textContent = 'Radar online. Imperfect scan mode active.'; });
-    tick();
-  </script>
-</body>
-</html>
+    sim.next[id]=clamp(val,0,1);
+  }
+  const tmp=sim.field; sim.field=sim.next; sim.next=tmp; const rt=sim.rotationField; sim.rotationField=sim.rotationNext; sim.rotationNext=rt; sim.time++;
+}
+function colorFor(v){if(v<sim.threshold)return null; const j=0.9+Math.random()*0.18; if(v<0.35)return `rgba(46,205,103,${Math.min(0.8,(0.22+v*1.28)*j).toFixed(3)})`; if(v<0.65)return `rgba(242,226,75,${Math.min(0.86,(0.38+(v-0.35)*1.5)*j).toFixed(3)})`; return `rgba(231,57,57,${Math.min(0.94,(0.56+(v-0.65)*1.7)*j).toFixed(3)})`;}
+function drawMap(){if(mapImage.complete&&mapImage.naturalWidth>0){ctx.globalAlpha=.7;ctx.drawImage(mapImage,0,0,canvas.width,canvas.height);ctx.globalAlpha=1;} ctx.fillStyle='rgba(8,16,28,0.24)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='rgba(0,0,0,0.30)';ctx.fillRect(0,0,canvas.width,canvas.height)}
+function render(){ctx.clearRect(0,0,canvas.width,canvas.height);drawMap(); const c=sim.cellSize; for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){const v=sim.field[idx(x,y)],col=colorFor(v); if(!col)continue; ctx.fillStyle=col; ctx.fillRect(x*c,y*c,c,c);} ctx.fillStyle='rgba(255,255,255,0.02)';ctx.fillRect(0,0,canvas.width,canvas.height)}
+function tick(){sim.frame++; if(sim.frame%3===0)updateField(); render(); requestAnimationFrame(tick)}
+canvas.addEventListener('click',e=>{const r=canvas.getBoundingClientRect(); injectTool(e.clientX-r.left,e.clientY-r.top)});
+addEventListener('resize',resize); buildToolbar(); resize(); tick();
+</script></body></html>
