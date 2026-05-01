@@ -1,0 +1,110 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Radar Storm Viewer</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#060a12}canvas{width:100%;height:100%;display:block;image-rendering:pixelated}.hud{position:fixed;left:12px;bottom:12px;color:#d6e8ff;font:12px sans-serif;background:rgba(10,16,26,.7);padding:8px 10px;border:1px solid rgba(170,200,255,.3);border-radius:8px}</style></head>
+<body><canvas id='c'></canvas><div class='hud'>Click/drag to spawn storms</div>
+<script>
+const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+const map=new Image(); map.crossOrigin='anonymous'; map.src='https://upload.wikimedia.org/wikipedia/commons/8/80/Equirectangular-projection.jpg';
+const sim={cell:3,cols:0,rows:0,field:null,next:null,rot:null,rotN:null,types:null,age:null,ageN:null,time:0};
+const stormNames=['Alex','Brooke','Chris','Dylan','Ethan','Fiona','Gavin','Hazel','Ivan','Jade','Kai','Lena','Milo','Nora','Orion','Piper','Quinn','Riley','Sage','Tyler','Uma','Vera','Wyatt','Xena','Yara','Zane'];
+let nameIndex=0,stormId=1;
+const storms=[];
+let mouseDown=false,mx=0,my=0;
+const idx=(x,y)=>y*sim.cols+x, sample=(a,x,y)=>(x<0||y<0||x>=sim.cols||y>=sim.rows)?0:a[idx(x,y)];
+function resize(){canvas.width=innerWidth;canvas.height=innerHeight;sim.cols=Math.ceil(canvas.width/sim.cell);sim.rows=Math.ceil(canvas.height/sim.cell);const n=sim.cols*sim.rows;sim.field=new Float32Array(n);sim.next=new Float32Array(n);sim.rot=new Float32Array(n);sim.rotN=new Float32Array(n);sim.types=new Uint8Array(n);sim.age=new Float32Array(n);sim.ageN=new Float32Array(n);} addEventListener('resize',resize);resize();
+function stormType(x,y){const r=Math.random();const water=(y/sim.rows>0.55&&y/sim.rows<0.82); if(water&&r<0.05)return 4; if(r<0.60)return 1; if(r<0.85)return 2; if(r<0.95)return 3; return 4;}
+function spawnStorm(px,py){const gx=Math.floor(px/sim.cell),gy=Math.floor(py/sim.cell),r=4,type=stormType(gx,gy); for(let y=gy-r;y<=gy+r;y++)for(let x=gx-r;x<=gx+r;x++){if(x<0||y<0||x>=sim.cols||y>=sim.rows)continue; const d2=(x-gx)**2+(y-gy)**2;if(d2>r*r)continue; const f=1-d2/(r*r),id=idx(x,y); sim.field[id]=Math.min(1,sim.field[id]+f*(0.18+Math.random()*0.17)); sim.types[id]=type; sim.age[id]=0; if(type>=3)sim.rot[id]=Math.min(1,sim.rot[id]+f*(0.14+Math.random()*0.18)); }}
+function jetX(x,y){return Math.sin(y*0.06)*2.8 + Math.sin(x*0.02+y*0.03)*0.35;} function jetY(x,y){return Math.cos(x*0.02)*0.22;}
+function update(){
+ for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
+  const id=idx(x,y),v=sim.field[id],t=sim.types[id],rot=sim.rot[id],age=sim.age[id];
+  const n=sample(sim.field,x,y-1),s=sample(sim.field,x,y+1),e=sample(sim.field,x+1,y),w=sample(sim.field,x-1,y),avg=(n+s+e+w)*0.25;
+  let wx=jetX(x,y);
+  let wy=jetY(x,y);
+  if(t===3||t===4){const gx=sample(sim.rot,x+1,y)-sample(sim.rot,x-1,y), gy=sample(sim.rot,x,y+1)-sample(sim.rot,x,y-1); wx+=-gy*1.2+rot*0.6; wy+=gx*1.2;}
+
+  const ax=x-wx*0.25, ay=y-wy*0.25, fx=Math.floor(ax), fy=Math.floor(ay), tx=ax-fx, ty=ay-fy;
+  const a00=sample(sim.field,fx,fy),a10=sample(sim.field,fx+1,fy),a01=sample(sim.field,fx,fy+1),a11=sample(sim.field,fx+1,fy+1);
+  const adv=(a00*(1-tx)+a10*tx)*(1-ty)+(a01*(1-tx)+a11*tx)*ty;
+  const along=sample(sim.field,Math.round(x+Math.sign(wx||1)),Math.round(y+Math.sign(wy||1)));
+  const advMix=adv*0.6+along*0.4;
+
+  let growth=0.012; if(t===2)growth=0.016; else if(t===3)growth=0.02; else if(t===4)growth=0.018;
+  let nv=v*0.25+avg*0.25+advMix*0.5;
+  nv += nv*0.08; nv += (nv*nv)*0.04;
+  if(nv>0.4) nv*=1.12;
+  if(Math.random()<0.01) nv*=1.25;
+  if(Math.random()<0.02) nv*=0.85;
+  nv += Math.random()*0.02;
+
+  if(t===3&&Math.random()<0.002){nv*=1.12; sim.rotN[id]=Math.min(1,rot+0.15);} 
+  if(t===4){nv+=Math.max(0,rot)*0.012; sim.rotN[id]=Math.min(1,rot*0.994+0.002);} else sim.rotN[id]=Math.max(0,rot*0.987);
+
+  nv += (nv*nv)*growth;
+  if(age<120) nv*=0.995; else if(nv<0.15) nv*=0.92; else nv*=0.97;
+  if(nv<0.015){nv=0; sim.types[id]=0; sim.rotN[id]=0; sim.ageN[id]=0;} else sim.ageN[id]=Math.min(999,age+1);
+  sim.next[id]=Math.min(1,Math.max(0,nv));
+ }
+ [sim.field,sim.next]=[sim.next,sim.field]; [sim.rot,sim.rotN]=[sim.rotN,sim.rot]; [sim.age,sim.ageN]=[sim.ageN,sim.age]; sim.time++;
+}
+
+
+function classifyStorm(intensity, rot, tornadic, yNorm, size){
+  if(tornadic) return 'Tornadic';
+  if(yNorm>0.55&&yNorm<0.82&&size>120&&intensity>0.65) return 'Hurricane';
+  if(yNorm>0.55&&yNorm<0.82&&size>80) return 'Tropical System';
+  if(rot>0.35 && intensity>0.55) return 'Supercell';
+  if(intensity>0.65) return 'Severe';
+  if(intensity>0.38) return 'Strong';
+  return 'Weak';
+}
+
+function detectStormClusters(){
+  const visited=new Uint8Array(sim.cols*sim.rows), clusters=[];
+  const th=0.12;
+  for(let y=1;y<sim.rows-1;y++)for(let x=1;x<sim.cols-1;x++){
+    const id=idx(x,y); if(visited[id]||sim.field[id]<th) continue;
+    const q=[[x,y]]; visited[id]=1;
+    let sumX=0,sumY=0,sumI=0,sumR=0,count=0,maxI=0;
+    while(q.length){const [cx,cy]=q.pop(); const cid=idx(cx,cy),v=sim.field[cid]; if(v<th) continue;
+      sumX+=cx; sumY+=cy; sumI+=v; sumR+=sim.rot[cid]; count++; if(v>maxI)maxI=v;
+      const ns=[[1,0],[-1,0],[0,1],[0,-1]];
+      for(const [dx,dy] of ns){const nx=cx+dx,ny=cy+dy,nid=idx(nx,ny); if(nx<1||ny<1||nx>=sim.cols-1||ny>=sim.rows-1||visited[nid])continue; if(sim.field[nid]<th)continue; visited[nid]=1; q.push([nx,ny]);}
+    }
+    if(count<8) continue;
+    clusters.push({x:sumX/count,y:sumY/count,intensity:sumI/count,rot:sumR/count,size:count,maxI});
+  }
+  return clusters;
+}
+
+function updateStormTracking(){
+  const clusters=detectStormClusters();
+  for(const s of storms) s.missed++;
+  for(const c of clusters){
+    let best=null,bestD=9999;
+    for(const s of storms){const d=Math.hypot(s.x-c.x,s.y-c.y); if(d<bestD&&d<12){best=s;bestD=d;}}
+    const tornadic=c.rot>0.55&&c.maxI>0.72&&Math.random()<0.08;
+    if(best){best.x=c.x;best.y=c.y;best.intensity=c.intensity;best.rot=c.rot;best.size=c.size;best.age++;best.missed=0;best.tornadic=tornadic||best.tornadic&&Math.random()<0.92;}
+    else storms.push({id:stormId++,name:stormNames[nameIndex++%stormNames.length],x:c.x,y:c.y,intensity:c.intensity,rot:c.rot,size:c.size,age:0,path:[],missed:0,tornadic});
+  }
+  for(let i=storms.length-1;i>=0;i--){const s=storms[i]; s.path.push([s.x,s.y]); if(s.path.length>80)s.path.shift(); s.classification=classifyStorm(s.intensity,s.rot,s.tornadic,s.y/sim.rows,s.size); if(s.missed>18||s.intensity<0.05)storms.splice(i,1);}
+}
+
+function drawStormUI(){
+  ctx.lineWidth=1.2; ctx.font='11px Segoe UI, Arial';
+  for(const s of storms){
+    if(s.path.length>1){ctx.strokeStyle='rgba(245,245,255,0.33)'; ctx.beginPath(); for(let i=0;i<s.path.length;i++){const [px,py]=s.path[i]; const X=px*sim.cell,Y=py*sim.cell; if(i===0)ctx.moveTo(X,Y); else ctx.lineTo(X,Y);} ctx.stroke();}
+    const sx=s.x*sim.cell, sy=s.y*sim.cell;
+    if(s.classification==='Supercell'||s.classification==='Tornadic'){ctx.strokeStyle='rgba(220,220,255,0.8)'; ctx.beginPath(); ctx.arc(sx,sy,6,0,Math.PI*2); ctx.stroke();}
+    if(s.classification==='Tornadic'){ctx.fillStyle='rgba(255,70,70,0.9)'; ctx.beginPath(); ctx.arc(sx+8,sy-8,3,0,Math.PI*2); ctx.fill();}
+    ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(sx+6,sy-18,94,24);
+    ctx.fillStyle='rgba(240,248,255,0.95)'; ctx.fillText('Storm '+s.name,sx+10,sy-8); ctx.fillStyle='rgba(212,224,255,0.9)'; ctx.fillText(s.classification,sx+10,sy+2);
+  }
+}
+
+function radarColor(v){if(v<0.08)return null; const j=0.9+Math.random()*0.15; if(v<0.35)return `rgba(46,205,103,${(0.22+v*1.2)*j})`; if(v<0.65)return `rgba(242,226,75,${(0.38+(v-0.35)*1.4)*j})`; return `rgba(231,57,57,${(0.58+(v-0.65)*1.5)*j})`;}
+function draw(){ctx.clearRect(0,0,canvas.width,canvas.height); if(map.complete&&map.naturalWidth>0){ctx.drawImage(map,0,0,canvas.width,canvas.height);} ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fillRect(0,0,canvas.width,canvas.height);
+ const c=sim.cell; for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){let v=sim.field[idx(x,y)]; if(v<0.25&&Math.random()<0.03)v*=0.1; const col=radarColor(v); if(!col)continue; ctx.fillStyle=col; ctx.fillRect(x*c,y*c,c,c);} drawStormUI(); }
+function tick(){if(mouseDown)spawnStorm(mx,my); update(); if(sim.time%4===0)updateStormTracking(); draw(); requestAnimationFrame(tick)}
+canvas.onmousedown=e=>{mouseDown=true;const r=canvas.getBoundingClientRect();mx=e.clientX-r.left;my=e.clientY-r.top;spawnStorm(mx,my)};canvas.onmouseup=()=>mouseDown=false;canvas.onmouseleave=()=>mouseDown=false;canvas.onmousemove=e=>{const r=canvas.getBoundingClientRect();mx=e.clientX-r.left;my=e.clientY-r.top};
+tick();
+</script></body></html>
