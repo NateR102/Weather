@@ -18,7 +18,7 @@ const canvas = document.getElementById('radar'), ctx = canvas.getContext('2d'), 
 const mapImage = new Image(); mapImage.crossOrigin='anonymous'; mapImage.src='https://upload.wikimedia.org/wikipedia/commons/8/80/Equirectangular-projection.jpg';
 const TOOLS=['high_pressure','low_pressure','moisture','temperature','wind_shear','cold_front','warm_front','dryline','supercell'];
 const TOOL_LABEL={high_pressure:'High Pressure',low_pressure:'Low Pressure',moisture:'Moisture',temperature:'Temperature',wind_shear:'Wind Shear',cold_front:'Cold Front',warm_front:'Warm Front',dryline:'Dryline',supercell:'Supercell'};
-const sim={cellSize:3,cols:0,rows:0,field:null,next:null,rotationField:null,rotationNext:null,pressureField:null,temperatureField:null,humidityField:null,shearField:null,windXField:null,windYField:null,threshold:0.08,time:0,frame:0,tool:'low_pressure'};
+const sim={cellSize:3,cols:0,rows:0,field:null,next:null,rotationField:null,rotationNext:null,pressureField:null,temperatureField:null,humidityField:null,shearField:null,windXField:null,windYField:null,jetStreamX:null,threshold:0.08,time:0,frame:0,tool:'low_pressure'};
 const idx=(x,y)=>y*sim.cols+x, sample=(f,x,y)=>(x<0||y<0||x>=sim.cols||y>=sim.rows)?0:f[idx(x,y)];
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 function noise(x,y,t=0){const v=Math.sin(x*12.9898+y*78.233+t*3.71)*43758.5453;return v-Math.floor(v);}
@@ -29,8 +29,10 @@ function buildToolbar(){
 function setTool(t){sim.tool=t; TOOLS.forEach(k=>document.getElementById('tool_'+k)?.classList.toggle('active',k===t)); document.getElementById('status').textContent='Tool: '+TOOL_LABEL[t].toUpperCase();}
 function initFields(){
   const n=sim.cols*sim.rows; sim.field=new Float32Array(n); sim.next=new Float32Array(n); sim.rotationField=new Float32Array(n); sim.rotationNext=new Float32Array(n);
-  sim.pressureField=new Float32Array(n); sim.temperatureField=new Float32Array(n); sim.humidityField=new Float32Array(n); sim.shearField=new Float32Array(n); sim.windXField=new Float32Array(n); sim.windYField=new Float32Array(n);
+  sim.pressureField=new Float32Array(n); sim.temperatureField=new Float32Array(n); sim.humidityField=new Float32Array(n); sim.shearField=new Float32Array(n); sim.windXField=new Float32Array(n); sim.windYField=new Float32Array(n); sim.jetStreamX=new Float32Array(sim.rows);
   for(let i=0;i<n;i++){sim.pressureField[i]=0.5; sim.temperatureField[i]=0.5; sim.humidityField[i]=0.5; sim.shearField[i]=0.3;}
+  const jetScale=Math.PI/Math.max(8,sim.rows-1), jetStrength=0.42;
+  for(let y=0;y<sim.rows;y++){const lat=Math.abs((y/(sim.rows-1))*2-1); const midBoost=Math.max(0,1-Math.abs(lat-0.45)*2.1); sim.jetStreamX[y]=Math.sin(y*jetScale*2.6)*jetStrength*midBoost;}
 }
 function resize(){canvas.width=innerWidth; canvas.height=innerHeight; sim.cols=Math.ceil(canvas.width/sim.cellSize); sim.rows=Math.ceil(canvas.height/sim.cellSize); initFields();}
 function applyBrush(gx,gy,r,fn){for(let y=gy-r;y<=gy+r;y++)for(let x=gx-r;x<=gx+r;x++){if(x<0||y<0||x>=sim.cols||y>=sim.rows)continue; const d2=(x-gx)**2+(y-gy)**2;if(d2>r*r)continue; fn(idx(x,y),1-d2/(r*r),x,y);}}
@@ -48,12 +50,14 @@ function injectTool(px,py){const gx=Math.floor(px/sim.cellSize), gy=Math.floor(p
   if(sim.tool==='wind_shear')sim.shearField[id]=clamp(sim.shearField[id]+0.22*f,0,1);});
 }
 function updateField(){
-  const WIND_STRENGTH=2.2, WIND_CLAMP=1.15;
+  const WIND_STRENGTH=2.2, WIND_CLAMP=1.15, SHEAR_STRENGTH=0.22;
   for(let y=0;y<sim.rows;y++)for(let x=0;x<sim.cols;x++){
     const id=idx(x,y);
     const dPx=sample(sim.pressureField,x+1,y)-sample(sim.pressureField,x-1,y);
     const dPy=sample(sim.pressureField,x,y+1)-sample(sim.pressureField,x,y-1);
-    let wx=-dPx*WIND_STRENGTH, wy=-dPy*WIND_STRENGTH;
+    const shearX=(noise(x*0.11,y*0.11,sim.time*0.01)-0.5)*SHEAR_STRENGTH;
+    const shearY=(noise(x*0.11+19,y*0.11+31,sim.time*0.01)-0.5)*SHEAR_STRENGTH;
+    let wx=-dPx*WIND_STRENGTH + sim.jetStreamX[y] + shearX, wy=-dPy*WIND_STRENGTH + shearY;
     const mag=Math.hypot(wx,wy);
     if(mag>WIND_CLAMP){const k=WIND_CLAMP/mag; wx*=k; wy*=k;}
     sim.windXField[id]=wx; sim.windYField[id]=wy;
@@ -74,12 +78,17 @@ function updateField(){
 
     const div=(sample(sim.windXField,x+1,y)-sample(sim.windXField,x-1,y))+(sample(sim.windYField,x,y+1)-sample(sim.windYField,x,y-1));
     const convergence=Math.max(0,-div*0.5), divergence=Math.max(0,div*0.5);
-    let val=sim.field[id]*0.12+avg*0.42+adv*0.46;
-    const growth=convergence*h*t;
-    if(growth>0.02) val+=growth*0.12;
-    val-=divergence*(0.04+0.03*(1-h));
+    let val=sim.field[id]*0.10+avg*0.38+adv*0.52;
+    const instability=h*t;
+    const growth=convergence*instability;
+    if(growth>0.02) val+=growth*0.10;
+    val-=divergence*(0.05+0.04*(1-h));
+    if(instability<0.28) val*=0.92;
     val += Math.max(0,rot)*Math.max(0,sh-0.45)*0.014;
-    val += (val*val)*(0.012+growth*0.03);
+    val += (val*val)*(0.009+growth*0.025);
+    val*=0.955;
+    if(h<0.35) val*=0.9;
+    if(divergence>0.10) val*=0.85;
     if(Math.abs(sim.field[id]-avg)>0.08 && Math.random()<0.13) val*=0.84;
     if(val<0.28 && Math.random()<0.03) val*=0.05;
     val += (Math.random()*2-1)*0.008;
